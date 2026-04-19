@@ -304,16 +304,19 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @spec resolve_runtime_turn_sandbox_policy(%__MODULE__{}, Path.t() | nil, keyword()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, map() | nil} | {:error, term()}
   def resolve_runtime_turn_sandbox_policy(settings, workspace \\ nil, opts \\ []) do
-    case settings.codex.turn_sandbox_policy do
-      %{} = policy ->
-        {:ok, policy}
+    cond do
+      is_map(settings.codex.turn_sandbox_policy) ->
+        {:ok, settings.codex.turn_sandbox_policy}
 
-      _ ->
+      settings.codex.thread_sandbox == "workspace-write" ->
         workspace
         |> default_workspace_root(settings.workspace.root)
         |> default_runtime_turn_sandbox_policy(opts)
+
+      true ->
+        {:ok, nil}
     end
   end
 

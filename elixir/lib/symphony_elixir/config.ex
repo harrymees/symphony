@@ -23,7 +23,7 @@ defmodule SymphonyElixir.Config do
   @type codex_runtime_settings :: %{
           approval_policy: String.t() | map(),
           thread_sandbox: String.t(),
-          turn_sandbox_policy: map()
+          turn_sandbox_policy: map() | nil
         }
 
   @spec settings() :: {:ok, Schema.t()} | {:error, term()}

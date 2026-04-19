@@ -40,9 +40,7 @@ agent:
 codex:
   command: {{CODEX_COMMAND}}
   approval_policy: never
-  thread_sandbox: workspace-write
-  turn_sandbox_policy:
-    type: workspaceWrite
+  thread_sandbox: danger-full-access
 server:
   dashboard_enabled: true
   host: "{{SYMPHONY_HOST}}"

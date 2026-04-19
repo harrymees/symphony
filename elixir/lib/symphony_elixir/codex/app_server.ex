@@ -19,7 +19,7 @@ defmodule SymphonyElixir.Codex.AppServer do
           approval_policy: String.t() | map(),
           auto_approve_requests: boolean(),
           thread_sandbox: String.t(),
-          turn_sandbox_policy: map(),
+          turn_sandbox_policy: map() | nil,
           thread_id: String.t(),
           workspace: Path.t(),
           worker_host: String.t() | nil
@@ -302,22 +302,29 @@ defmodule SymphonyElixir.Codex.AppServer do
   end
 
   defp start_turn(port, thread_id, prompt, issue, workspace, approval_policy, turn_sandbox_policy) do
+    params = %{
+      "threadId" => thread_id,
+      "input" => [
+        %{
+          "type" => "text",
+          "text" => prompt
+        }
+      ],
+      "cwd" => workspace,
+      "title" => "#{issue.identifier}: #{issue.title}",
+      "approvalPolicy" => approval_policy
+    }
+
+    params =
+      case turn_sandbox_policy do
+        %{} = policy -> Map.put(params, "sandboxPolicy", policy)
+        _ -> params
+      end
+
     send_message(port, %{
       "method" => "turn/start",
       "id" => @turn_start_id,
-      "params" => %{
-        "threadId" => thread_id,
-        "input" => [
-          %{
-            "type" => "text",
-            "text" => prompt
-          }
-        ],
-        "cwd" => workspace,
-        "title" => "#{issue.identifier}: #{issue.title}",
-        "approvalPolicy" => approval_policy,
-        "sandboxPolicy" => turn_sandbox_policy
-      }
+      "params" => params
     })
 
     case await_response(port, @turn_start_id) do
