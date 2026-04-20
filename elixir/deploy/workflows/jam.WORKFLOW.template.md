@@ -50,6 +50,23 @@ server:
 
 You are working in the Jam repository.
 
+Identity requirements:
+- The Linear user for this workflow should be the `harrymees` user.
+- The GitHub user for this workflow should be the `harrymees` user.
+
+GitHub execution requirements:
+- Do **not** use any Codex/OpenAI GitHub connector, MCP GitHub server, or `mcp__codex_apps__github_*` tool for branch, PR, review, or comment actions.
+- Perform all GitHub work via the local shell using the checked-out repo's `git` remote plus the host's authenticated `gh` CLI.
+- Create pull requests with `gh pr create`; inspect/update them with local `gh pr ...` / `gh api ...` commands only.
+- If the issue already has an open PR, reuse that PR's branch for all follow-up work; do **not** open a replacement PR for rework or review feedback.
+- For updates to an existing open PR, push the updated branch back to the same remote branch, using `git push --force-with-lease` when history must be rewritten.
+- If a connector/MCP GitHub tool is offered, ignore it and continue with local `git`/`gh` commands so PRs are authored as the host's `harrymees` account.
+
+Comment marker requirements:
+- On both Linear comments and GitHub PR/review comments, when you have seen a comment and are actively working from it, mark that comment with a `👀` reaction.
+- Once the requested action is complete or the comment has been fully handled, replace the `👀` reaction with a `🟢` reaction.
+- Do not leave both markers on the same comment at once; `👀` means in progress, `🟢` means done.
+
 Repository model:
 - Jam is a pnpm monorepo.
 - Core concept: all application state, including VDOM state, lives in a shared fact database.
@@ -66,7 +83,7 @@ Tooling guidance:
 - If `mise.toml` is present, prefer `mise exec -- <command>` so the pinned Node/pnpm toolchain is used.
 - Typical validation commands live in `AGENTS.md` and include `just test`, `just typecheck`, package-level `pnpm test`, and Playwright e2e for relevant examples.
 - For browser automation, prefer the repo's documented agent/browser workflow when applicable.
-- If you need repo-local Codex skills and `.codex` is missing in the workspace, inspect the repo root carefully before assuming the skill exists.
+- If you need repo-local agent skills and `.agents` is missing in the workspace, inspect the repo root carefully before assuming the skill exists.
 
 The following Symphony workflow contract remains authoritative; follow it exactly, and treat the repository-specific guidance above as additional constraints rather than a replacement.
 
@@ -133,7 +150,7 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - `commit`: produce clean, logical commits during implementation.
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
-- `land`: when ticket reaches `Merging`, explicitly open and follow `.codex/skills/land/SKILL.md`, which includes the `land` loop.
+- `land`: when ticket reaches `Merging`, explicitly open and follow `.agents/skills/land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
 
@@ -156,12 +173,13 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.codex/skills/land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Merging` -> on entry, open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
    - If a branch PR exists and is `CLOSED` or `MERGED`, treat prior branch work as non-reusable for this run.
    - Create a fresh branch from `origin/main` and restart execution flow as a new attempt.
+   - If a branch PR exists and is still open, keep using that same branch/PR; do not create a new PR for rework.
 5. For `Todo` tickets, do startup sequencing in this exact order:
    - `update_issue(..., state: "In Progress")`
    - find/create `## Codex Workpad` bootstrap comment
@@ -208,12 +226,17 @@ When a ticket has an attached PR, run this protocol before moving to `Human Revi
    - Top-level PR comments (`gh pr view --comments`).
    - Inline review comments (`gh api repos/<owner>/<repo>/pulls/<pr>/comments`).
    - Review summaries/states (`gh pr view --json reviews`).
+   - Linear issue comments.
 3. Treat every actionable reviewer comment (human or bot), including inline review comments, as blocking until one of these is true:
    - code/test/docs updated to address it, or
    - explicit, justified pushback reply is posted on that thread.
+   - As soon as a GitHub or Linear comment becomes part of the active work queue, mark it with `👀`.
 4. Update the workpad plan/checklist to include each feedback item and its resolution status.
 5. Re-run validation after feedback-driven changes and push updates.
-6. Repeat this sweep until there are no outstanding actionable comments.
+   - After pushing fixes for a GitHub review thread, resolve that thread if the feedback is fully addressed and no further input is required.
+   - If more clarification or a reviewer answer is still needed to proceed safely, reply on the GitHub thread with the specific open question and leave the thread unresolved.
+   - When a GitHub or Linear comment has been fully addressed, replace its `👀` reaction with `🟢`.
+6. Repeat this sweep until there are no outstanding actionable comments or unresolved clarification threads waiting on reviewer input.
 
 ## Blocked-access escape hatch (required behavior)
 
@@ -269,29 +292,29 @@ Use this only when completion is blocked by missing required tools or missing au
     - Exception: if blocked by missing required non-GitHub tools/auth per the blocked-access escape hatch, move to `Human Review` with the blocker brief and explicit unblock actions.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
-    - Ensure branch was pushed with any required updates.
+    - Ensure the original PR branch was updated with any required changes, using `git push --force-with-lease` when necessary instead of opening a new PR.
     - Then move to `Human Review`.
 
 ## Step 3: Human Review and merge handling
 
 1. When the issue is in `Human Review`, do not code or change ticket content.
-2. Poll for updates as needed, including GitHub PR review comments from humans and bots.
-3. If review feedback requires changes, move the issue to `Rework` and follow the rework flow.
+2. Poll for updates as needed in both Linear and GitHub, including Linear issue comments plus GitHub PR review comments and PR comments from humans and bots.
+   - For newly seen actionable comments, add `👀` while they are being worked.
+3. If either Linear or GitHub feedback indicates additional changes are needed, move the issue to `Rework` and follow the rework flow.
+   - After the requested follow-up is complete, replace the `👀` reaction on those comments with `🟢`.
 4. If approved, human moves the issue to `Merging`.
-5. When the issue is in `Merging`, open and follow `.codex/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
+5. When the issue is in `Merging`, open and follow `.agents/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
 6. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling
 
 1. Treat `Rework` as a full approach reset, not incremental patching.
 2. Re-read the full issue body and all human comments; explicitly identify what will be done differently this attempt.
-3. Close the existing PR tied to the issue.
-4. Remove the existing `## Codex Workpad` comment from the issue.
-5. Create a fresh branch from `origin/main`.
-6. Start over from the normal kickoff flow:
-   - If current issue state is `Todo`, move it to `In Progress`; otherwise keep the current state.
-   - Create a new bootstrap `## Codex Workpad` comment.
-   - Build a fresh plan/checklist and execute end-to-end.
+3. Keep the existing open PR tied to the issue; do **not** close it just because the issue entered `Rework`.
+4. Keep using the original PR branch for the rework unless the PR is already closed/merged.
+5. Keep and update the existing `## Codex Workpad` comment in place instead of replacing it with a new one.
+6. Refresh the plan/checklist to reflect the new approach, then execute the rework end-to-end on the same branch.
+7. Push rework commits back to the original PR branch; if history rewrite is needed, use `git push --force-with-lease`.
 
 ## Completion bar before Human Review
 

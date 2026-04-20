@@ -33,7 +33,7 @@ Symphony stops the active agent for that issue and cleans up matching workspaces
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
 3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
+4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo under `.agents/skills/`.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
 5. Customize the copied `WORKFLOW.md` file for your project.
@@ -165,7 +165,7 @@ The observability UI now runs on a minimal Phoenix stack:
 - `lib/`: application code and Mix tasks
 - `test/`: ExUnit coverage for runtime behavior
 - `WORKFLOW.md`: in-repo workflow contract used by local runs
-- `../.codex/`: repository-local Codex skills and setup helpers
+- `../.agents/`: repository-local agent skills and setup helpers
 
 ## Testing
 
