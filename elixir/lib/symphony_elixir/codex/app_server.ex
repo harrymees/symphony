@@ -964,6 +964,10 @@ defmodule SymphonyElixir.Codex.AppServer do
         Logger.debug("Ignoring message while waiting for response: #{inspect(other)}")
         with_timeout_response(port, request_id, timeout_ms, "")
 
+      {:ok, other} ->
+        Logger.debug("Ignoring non-object JSON while waiting for response: #{inspect(other)}")
+        with_timeout_response(port, request_id, timeout_ms, "")
+
       {:error, _} ->
         log_non_json_stream_line(payload, "response stream")
         with_timeout_response(port, request_id, timeout_ms, "")

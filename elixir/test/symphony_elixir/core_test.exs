@@ -673,6 +673,61 @@ defmodule SymphonyElixir.CoreTest do
            } = :sys.get_state(pid).retry_attempts[issue_id]
   end
 
+  test "retry dispatch refresh errors are rescheduled instead of orphaning the claim" do
+    issue_id = "issue-refresh-error"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-570",
+      state: "Rework",
+      title: "Retry me"
+    }
+
+    fetcher = fn [^issue_id] -> {:error, {:linear_api_status, 400}} end
+
+    updated_state =
+      Orchestrator.dispatch_issue_for_test(state, issue, 1, nil, fetcher)
+
+    assert MapSet.member?(updated_state.claimed, issue_id)
+
+    assert %{attempt: 2, identifier: "MT-570", error: error} =
+             updated_state.retry_attempts[issue_id]
+
+    assert error =~ "issue refresh failed"
+    assert error =~ "linear_api_status"
+  end
+
+  test "retry dispatch releases stale claim when revalidation shows issue is gone" do
+    issue_id = "issue-refresh-missing"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-571",
+      state: "Rework",
+      title: "Release me"
+    }
+
+    fetcher = fn [^issue_id] -> {:ok, []} end
+
+    updated_state =
+      Orchestrator.dispatch_issue_for_test(state, issue, 1, nil, fetcher)
+
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert updated_state.retry_attempts == %{}
+  end
+
   test "manual refresh coalesces repeated requests and ignores superseded ticks" do
     now_ms = System.monotonic_time(:millisecond)
     stale_tick_token = make_ref()

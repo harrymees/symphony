@@ -333,6 +333,20 @@ defmodule SymphonyElixir.Orchestrator do
     select_worker_host(state, preferred_worker_host)
   end
 
+  @doc false
+  @spec dispatch_issue_for_test(State.t(), Issue.t(), integer() | nil, String.t() | nil, ([String.t()] -> term())) ::
+          State.t()
+  def dispatch_issue_for_test(
+        %State{} = state,
+        %Issue{} = issue,
+        attempt,
+        preferred_worker_host,
+        issue_fetcher
+      )
+      when is_function(issue_fetcher, 1) do
+    dispatch_issue_with_fetcher(state, issue, attempt, preferred_worker_host, issue_fetcher)
+  end
+
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
 
   defp reconcile_running_issue_states([issue | rest], state, active_states, terminal_states) do
@@ -658,22 +672,41 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    dispatch_issue_with_fetcher(
+      state,
+      issue,
+      attempt,
+      preferred_worker_host,
+      &Tracker.fetch_issue_states_by_ids/1
+    )
+  end
+
+  defp dispatch_issue_with_fetcher(%State{} = state, issue, attempt, preferred_worker_host, issue_fetcher)
+       when is_function(issue_fetcher, 1) do
+    case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
-        state
+
+        maybe_release_retry_claim(state, issue.id, attempt)
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
 
-        state
+        maybe_release_retry_claim(state, refreshed_issue.id || issue.id, attempt)
 
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
-        state
+
+        maybe_reschedule_retry_after_refresh_error(
+          state,
+          issue,
+          attempt,
+          preferred_worker_host,
+          reason
+        )
     end
   end
 
@@ -920,6 +953,37 @@ defmodule SymphonyElixir.Orchestrator do
        )}
     end
   end
+
+  defp maybe_release_retry_claim(%State{} = state, issue_id, attempt)
+       when is_binary(issue_id) and is_integer(attempt) and attempt > 0 do
+    release_issue_claim(state, issue_id)
+  end
+
+  defp maybe_release_retry_claim(%State{} = state, _issue_id, _attempt), do: state
+
+  defp maybe_reschedule_retry_after_refresh_error(
+         %State{} = state,
+         %Issue{} = issue,
+         attempt,
+         preferred_worker_host,
+         reason
+       )
+       when is_integer(attempt) and attempt > 0 do
+    schedule_issue_retry(state, issue.id, attempt + 1, %{
+      identifier: issue.identifier,
+      error: "issue refresh failed: #{inspect(reason)}",
+      worker_host: preferred_worker_host
+    })
+  end
+
+  defp maybe_reschedule_retry_after_refresh_error(
+         %State{} = state,
+         _issue,
+         _attempt,
+         _preferred_worker_host,
+         _reason
+       ),
+       do: state
 
   defp release_issue_claim(%State{} = state, issue_id) do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
