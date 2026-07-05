@@ -27,15 +27,21 @@ hooks:
   before_remove: |
     cd elixir && mise exec -- mix workspace.before_remove
 agent:
+  harness: codex
+  model: gpt-5.5
   max_concurrent_agents: 10
   max_turns: 20
 codex:
-  command: codex --config shell_environment_policy.inherit=all --config 'model="gpt-5.5"' --config model_reasoning_effort=xhigh app-server
+  command: codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=xhigh app-server
   approval_policy: never
   thread_sandbox: workspace-write
   turn_sandbox_policy:
     type: workspaceWrite
     networkAccess: true
+claude_code:
+  command: claude -p --output-format json --permission-mode bypassPermissions --max-turns {{ max_turns }} {{ model_arg }} {{ prompt }}
+opencode:
+  command: opencode run {{ prompt }} {{ model_arg }}
 ---
 
 You are working on a Linear ticket `{{ issue.identifier }}`
@@ -55,6 +61,12 @@ Title: {{ issue.title }}
 Current status: {{ issue.state }}
 Labels: {{ issue.labels }}
 URL: {{ issue.url }}
+
+Agent selection:
+- Default harness/model come from `agent.harness` and `agent.model` in this workflow.
+- A Linear label `harness:<name>` or `agent:<name>` overrides the harness for a ticket.
+- A Linear label `model:<provider/model-or-id>` overrides the model for a ticket.
+- `agent:glm` is routed through the OpenCode harness; use an exact OpenCode model ID such as `model:zai-coding-plan/glm-5.2` (or the ID shown by `opencode /models`).
 
 Description:
 {% if issue.description %}

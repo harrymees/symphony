@@ -349,6 +349,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-HTTP",
                  "issue_url" => "https://example.org/issues/MT-HTTP",
                  "state" => "In Progress",
+                 "agent" => %{"harness" => "opencode", "model" => "zai-coding-plan/glm-5.2"},
                  "worker_host" => nil,
                  "workspace_path" => nil,
                  "session_id" => "thread-http",
@@ -366,6 +367,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_identifier" => "MT-RETRY",
                  "issue_url" => "https://example.org/issues/MT-RETRY",
                  "attempt" => 2,
+                 "agent" => %{"harness" => "claude_code", "model" => "claude-sonnet-4-5"},
                  "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
                  "error" => "boom",
                  "worker_host" => nil,
@@ -379,6 +381,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "issue_url" => "https://example.org/issues/MT-BLOCKED",
                  "state" => "In Progress",
                  "error" => "codex turn requires operator input",
+                 "agent" => %{"harness" => "codex", "model" => "gpt-5.5"},
                  "worker_host" => "dm-dev2",
                  "workspace_path" => "/workspaces/MT-BLOCKED",
                  "session_id" => "thread-blocked",
@@ -413,6 +416,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "worker_host" => nil,
                "workspace_path" => nil,
                "session_id" => "thread-http",
+               "agent" => %{"harness" => "opencode", "model" => "zai-coding-plan/glm-5.2"},
                "turn_count" => 7,
                "state" => "In Progress",
                "started_at" => issue_payload["running"]["started_at"],
@@ -593,7 +597,8 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert html =~ "Live"
     assert html =~ "Offline"
     assert html =~ "Copy ID"
-    assert html =~ "Codex update"
+    assert html =~ "Agent update"
+    assert html =~ "opencode / zai-coding-plan/glm-5.2"
     refute html =~ "data-runtime-clock="
     refute html =~ "setInterval(refreshRuntimeClocks"
     refute html =~ "Refresh now"
@@ -741,6 +746,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           issue_url: "https://example.org/issues/MT-HTTP",
           state: "In Progress",
           session_id: "thread-http",
+          agent_harness: "opencode",
+          agent_model: "zai-coding-plan/glm-5.2",
           turn_count: 7,
           codex_app_server_pid: nil,
           last_codex_message: "rendered",
@@ -757,6 +764,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           issue_id: "issue-retry",
           identifier: "MT-RETRY",
           issue_url: "https://example.org/issues/MT-RETRY",
+          agent_harness: "claude_code",
+          agent_model: "claude-sonnet-4-5",
           attempt: 2,
           due_in_ms: 2_000,
           error: "boom"
@@ -772,6 +781,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           worker_host: "dm-dev2",
           workspace_path: "/workspaces/MT-BLOCKED",
           session_id: "thread-blocked",
+          agent_harness: "codex",
+          agent_model: "gpt-5.5",
           blocked_at: DateTime.utc_now(),
           last_codex_event: :turn_input_required,
           last_codex_message: %{

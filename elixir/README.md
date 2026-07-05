@@ -15,10 +15,11 @@ This directory contains the current Elixir/OTP implementation of Symphony, based
 
 1. Polls Linear for candidate work
 2. Creates a workspace per issue
-3. Launches Codex in [App Server mode](https://developers.openai.com/codex/app-server/) inside the
-   workspace
-4. Sends a workflow prompt to Codex
-5. Keeps Codex working on the issue until the work is done
+3. Resolves the issue's configured agent harness/model and launches that dispatcher inside the
+   workspace. Codex app-server remains the default dispatcher; Claude Code and OpenCode dispatchers
+   are also supported.
+4. Sends a workflow prompt to the selected coding agent
+5. Keeps the selected agent working on the issue until the work is done
 
 During app-server sessions, Symphony also serves a client-side `linear_graphql` tool so that repo
 skills can make raw Linear GraphQL calls.
@@ -101,10 +102,16 @@ hooks:
   after_create: |
     git clone git@github.com:your-org/your-repo.git .
 agent:
+  harness: codex
+  model: gpt-5.5
   max_concurrent_agents: 10
   max_turns: 20
 codex:
   command: codex app-server
+claude_code:
+  command: claude -p --output-format json --permission-mode bypassPermissions --max-turns {{ max_turns }} {{ model_arg }} {{ prompt }}
+opencode:
+  command: opencode run {{ prompt }} {{ model_arg }}
 ---
 
 You are working on a Linear issue {{ issue.identifier }}.
@@ -115,6 +122,18 @@ Title: {{ issue.title }} Body: {{ issue.description }}
 Notes:
 
 - If a value is missing, defaults are used.
+- `agent.harness` selects the default dispatcher. Supported canonical values are `codex`,
+  `claude_code`, and `opencode`; aliases such as `claude-code`, `claude`, `open-code`, `glm`, and
+  `glm-5.2` are normalized at load time.
+- `agent.model` is the default model passed to the selected dispatcher. The exact model string must
+  be valid for the target CLI/provider.
+- Individual Linear issues can override the default dispatcher and model with labels:
+  - `harness:claude-code` or `agent:claude-code` → Claude Code
+  - `harness:opencode` → OpenCode
+  - `agent:glm` → OpenCode, which is currently the recommended harness for GLM-family coding models
+    because OpenCode has provider-agnostic model routing plus built-in Z.AI/GLM Coding Plan support
+  - `model:zai-coding-plan/glm-5.2` (or the exact model ID shown by `opencode /models`) selects the issue model
+  - conflicting harness/model labels fail dispatch instead of choosing one arbitrarily
 - `tracker.required_labels` is optional. When set, an issue must have every
   configured label to dispatch or continue running. Label matching ignores
   case and surrounding whitespace. A blank configured label matches no issue.
@@ -130,8 +149,20 @@ Notes:
 - Workflows that run package managers or other commands that resolve external hosts should set
   `networkAccess: true` in `codex.turn_sandbox_policy`; otherwise DNS/network access may be denied
   by the Codex turn sandbox.
-- `agent.max_turns` caps how many back-to-back Codex turns Symphony will run in a single agent
-  invocation when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `agent.max_turns` caps how many back-to-back agent turns Symphony will run in a single invocation
+  when a turn completes normally but the issue is still in an active state. Default: `20`.
+- `codex.command` may include `{{ model_arg }}` or omit it. If a Codex model is selected and the
+  command has no model placeholder, Symphony injects `--model <model>` before `app-server`.
+- `claude_code.command` and `opencode.command` are shell command templates. Supported placeholders:
+  `{{ prompt }}`, `{{ model }}`, `{{ model_arg }}`, `{{ max_turns }}`, `{{ workspace }}`, and
+  `{{ issue_identifier }}`. If `{{ prompt }}` is omitted, Symphony appends the rendered prompt as a
+  shell-escaped final argument.
+- Claude Code runs as a bounded CLI process by default (`claude -p ...`) and requires Claude Code
+  authentication on the host. It does not receive Symphony's Codex app-server dynamic tools.
+- OpenCode runs as a bounded CLI process by default (`opencode run ...`) and requires OpenCode
+  provider authentication. For GLM 5.2, configure OpenCode's Z.AI Coding Plan provider (or another
+  provider with GLM 5.2, such as Z.AI/OpenRouter/OpenAI-compatible) and use the exact model ID in the
+  issue's `model:` label.
 - If the Markdown body is blank, Symphony uses a default prompt template that includes the issue
   identifier, title, and body.
 - Use `hooks.after_create` to bootstrap a fresh workspace. For a Git-backed repo, you can run
@@ -152,8 +183,11 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 "$SOURCE_REPO_URL" .
+agent:
+  harness: codex
+  model: gpt-5.5
 codex:
-  command: "$CODEX_BIN --config 'model=\"gpt-5.5\"' app-server"
+  command: "$CODEX_BIN --config shell_environment_policy.inherit=all {{ model_arg }} app-server"
 ```
 
 - If `WORKFLOW.md` is missing or has invalid YAML at startup, Symphony does not boot.

@@ -16,6 +16,8 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.active_states == ["Todo", "In Progress"]
     assert config.tracker.terminal_states == ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"]
     assert config.tracker.assignee == nil
+    assert config.agent.harness == "codex"
+    assert config.agent.model == nil
     assert config.agent.max_turns == 20
 
     write_workflow_file!(Workflow.workflow_file_path(), poll_interval_ms: "invalid")
@@ -83,6 +85,17 @@ defmodule SymphonyElixir.CoreTest do
     write_workflow_file!(Workflow.workflow_file_path(), codex_thread_sandbox: 123)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
     assert message =~ "codex.thread_sandbox"
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_harness: "glm", agent_model: "zai-coding-plan/glm-5.2")
+    assert :ok = Config.validate!()
+    assert Config.settings!().agent.harness == "opencode"
+    assert Config.settings!().agent.model == "zai-coding-plan/glm-5.2"
+
+    write_workflow_file!(Workflow.workflow_file_path(), agent_harness: "not-a-harness")
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "agent.harness"
+    assert Config.Schema.normalize_agent_harness(nil) == nil
+    assert Config.Schema.normalize_optional_string("   ") == nil
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()

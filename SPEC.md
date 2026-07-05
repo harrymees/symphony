@@ -101,7 +101,8 @@ Important boundary:
 6. `Agent Runner`
    - Creates workspace.
    - Builds prompt from issue + workflow template.
-   - Launches the coding agent app-server client.
+   - Resolves the issue's selected coding-agent harness/model.
+   - Launches the selected coding-agent dispatcher.
    - Streams agent updates back to the orchestrator.
 
 7. `Status Surface` (OPTIONAL)
@@ -140,7 +141,8 @@ Symphony is easiest to port when kept in these layers:
 - Issue tracker API (Linear for `tracker.kind: linear` in this specification version).
 - Local filesystem for workspaces and logs.
 - OPTIONAL workspace population tooling (for example Git CLI, if used).
-- Coding-agent executable that supports the targeted Codex app-server mode.
+- Coding-agent executable that supports the selected dispatcher. The reference implementation ships
+  a Codex app-server dispatcher plus bounded CLI dispatchers for Claude Code and OpenCode.
 - Host environment authentication for the issue tracker and coding agent.
 
 ## 4. Core Domain Model
@@ -195,7 +197,7 @@ Examples:
 - workspace root
 - active and terminal issue states
 - concurrency limits
-- coding-agent executable/args/timeouts
+- coding-agent harness/model defaults and executable/args/timeouts
 - workspace hooks
 
 #### 4.1.4 Workspace
@@ -228,9 +230,11 @@ State tracked while a coding-agent subprocess is running.
 
 Fields:
 
-- `session_id` (string, `<thread_id>-<turn_id>`)
-- `thread_id` (string)
-- `turn_id` (string)
+- `session_id` (string; dispatcher-defined, Codex app-server implementations commonly use `<thread_id>-<turn_id>`)
+- `agent_harness` (string, for example `codex`, `claude_code`, or `opencode`)
+- `agent_model` (string or null)
+- `thread_id` (string or null; Codex app-server sessions)
+- `turn_id` (string or null; Codex app-server sessions)
 - `codex_app_server_pid` (string or null)
 - `last_codex_event` (string/enum or null)
 - `last_codex_timestamp` (timestamp or null)
@@ -284,7 +288,8 @@ Fields:
 - `Normalized Issue State`
   - Compare states after `lowercase`.
 - `Session ID`
-  - Compose from coding-agent `thread_id` and `turn_id` as `<thread_id>-<turn_id>`.
+  - Dispatcher-defined identifier for the live coding-agent turn/session. Codex app-server
+    implementations commonly compose this from `thread_id` and `turn_id` as `<thread_id>-<turn_id>`.
 
 ## 5. Workflow Specification (Repository Contract)
 
@@ -333,6 +338,8 @@ Top-level keys:
 - `hooks`
 - `agent`
 - `codex`
+- `claude_code`
+- `opencode`
 
 Unknown keys SHOULD be ignored for forward compatibility.
 
@@ -414,6 +421,15 @@ Fields:
 
 Fields:
 
+- `harness` (string)
+  - Default: `codex`.
+  - Selects the default dispatcher for issues that do not carry issue-level routing metadata.
+  - Implementations MAY support aliases but MUST normalize to a deterministic canonical harness name.
+- `model` (string or null)
+  - Default: `null`.
+  - Passed to the selected dispatcher as that dispatcher's model selector. Exact accepted values are
+    dispatcher/provider-specific.
+
 - `max_concurrent_agents` (integer)
   - Default: `10`
   - Changes SHOULD be re-applied at runtime and affect subsequent dispatch decisions.
@@ -428,6 +444,15 @@ Fields:
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
   - Invalid entries (non-positive or non-numeric) are ignored.
+
+Issue-level routing:
+
+- Implementations MAY allow Linear issue metadata to override `agent.harness` and `agent.model`.
+- The reference implementation recognizes issue labels in these forms:
+  - `harness:<name>` or `agent:<name>` for the dispatcher.
+  - `model:<provider/model-or-id>` for the model.
+- Conflicting issue-level harness/model directives MUST NOT be resolved by random ordering; they
+  SHOULD block or fail dispatch until the issue metadata is unambiguous.
 
 #### 5.3.6 `codex` (object)
 
@@ -445,6 +470,9 @@ fields locally if they want stricter startup checks.
   - Default: `codex app-server`
   - The runtime launches this command via `bash -lc` in the workspace directory.
   - The launched process MUST speak a compatible app-server protocol over stdio.
+  - Implementations MAY expose command-template placeholders such as `{{ model_arg }}`. If a Codex
+    model is selected and the command omits a model placeholder, implementations MAY inject the model
+    argument according to the Codex CLI's argument ordering.
 - `approval_policy` (Codex `AskForApproval` value)
   - Default: implementation-defined.
 - `thread_sandbox` (Codex `SandboxMode` value)
@@ -458,6 +486,35 @@ fields locally if they want stricter startup checks.
 - `stall_timeout_ms` (integer)
   - Default: `300000` (5 minutes)
   - If `<= 0`, stall detection is disabled.
+
+#### 5.3.7 `claude_code` (object)
+
+Fields:
+
+- `command` (string shell command template)
+  - Default: a bounded `claude -p` command that includes `{{ prompt }}` and `{{ model_arg }}`.
+  - The command is launched via `bash -lc` in the workspace directory.
+  - The dispatcher treats exit status `0` as a completed turn and non-zero exit as a failed turn.
+- `turn_timeout_ms` (integer)
+  - Default: `3600000` (1 hour).
+
+#### 5.3.8 `opencode` (object)
+
+Fields:
+
+- `command` (string shell command template)
+  - Default: a bounded `opencode run` command that includes `{{ prompt }}` and `{{ model_arg }}`.
+  - The command is launched via `bash -lc` in the workspace directory.
+  - The dispatcher treats exit status `0` as a completed turn and non-zero exit as a failed turn.
+- `turn_timeout_ms` (integer)
+  - Default: `3600000` (1 hour).
+
+Command-template placeholders supported by CLI-style dispatchers are implementation-defined. The
+reference implementation supports `{{ prompt }}`, `{{ model }}`, `{{ model_arg }}`, `{{ max_turns }}`,
+`{{ workspace }}`, and `{{ issue_identifier }}`. The GLM-family route uses OpenCode because OpenCode
+supports provider-agnostic model routing; the reference recommendation for GLM 5.2 is the
+Z.AI Coding Plan/OpenCode model route `zai-coding-plan/glm-5.2`, or the exact provider/model ID shown
+by the installed `opencode` model list.
 
 ### 5.4 Prompt Template Contract
 
@@ -567,7 +624,9 @@ Validation checks:
 - `tracker.kind` is present and supported.
 - `tracker.api_key` is present after `$` resolution.
 - `tracker.project_slug` is present when REQUIRED by the selected tracker kind.
+- `agent.harness` is supported after alias normalization.
 - `codex.command` is present and non-empty.
+- CLI dispatcher commands for implemented harnesses are present and non-empty.
 
 ### 6.4 Core Config Fields Summary (Cheat Sheet)
 
@@ -589,6 +648,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.after_run`: shell script or null
 - `hooks.before_remove`: shell script or null
 - `hooks.timeout_ms`: integer, default `60000`
+- `agent.harness`: string, default `codex`
+- `agent.model`: string or null, default `null`
 - `agent.max_concurrent_agents`: integer, default `10`
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
@@ -600,6 +661,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `codex.turn_timeout_ms`: integer, default `3600000`
 - `codex.read_timeout_ms`: integer, default `5000`
 - `codex.stall_timeout_ms`: integer, default `300000`
+- `claude_code.command`: shell command template, default implementation-defined bounded `claude -p`
+- `claude_code.turn_timeout_ms`: integer, default `3600000`
+- `opencode.command`: shell command template, default implementation-defined bounded `opencode run`
+- `opencode.turn_timeout_ms`: integer, default `3600000`
 
 ## 7. Orchestration State Machine
 
