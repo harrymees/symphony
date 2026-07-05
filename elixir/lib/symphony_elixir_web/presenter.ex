@@ -105,6 +105,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_identifier: entry.identifier,
       issue_url: Map.get(entry, :issue_url),
       state: entry.state,
+      agent: agent_payload(entry),
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path),
       session_id: entry.session_id,
@@ -127,6 +128,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_identifier: entry.identifier,
       issue_url: Map.get(entry, :issue_url),
       attempt: entry.attempt,
+      agent: agent_payload(entry),
       due_at: due_at_iso8601(entry.due_in_ms),
       error: entry.error,
       worker_host: Map.get(entry, :worker_host),
@@ -141,6 +143,7 @@ defmodule SymphonyElixirWeb.Presenter do
       issue_url: Map.get(entry, :issue_url),
       state: entry.state,
       error: entry.error,
+      agent: agent_payload(entry),
       worker_host: Map.get(entry, :worker_host),
       workspace_path: Map.get(entry, :workspace_path),
       session_id: entry.session_id,
@@ -156,6 +159,7 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
       session_id: running.session_id,
+      agent: agent_payload(running),
       turn_count: Map.get(running, :turn_count, 0),
       state: running.state,
       started_at: iso8601(running.started_at),
@@ -175,6 +179,7 @@ defmodule SymphonyElixirWeb.Presenter do
       attempt: retry.attempt,
       due_at: due_at_iso8601(retry.due_in_ms),
       error: retry.error,
+      agent: agent_payload(retry),
       worker_host: Map.get(retry, :worker_host),
       workspace_path: Map.get(retry, :workspace_path)
     }
@@ -185,6 +190,7 @@ defmodule SymphonyElixirWeb.Presenter do
       worker_host: Map.get(blocked, :worker_host),
       workspace_path: Map.get(blocked, :workspace_path),
       session_id: blocked.session_id,
+      agent: agent_payload(blocked),
       state: blocked.state,
       error: blocked.error,
       blocked_at: iso8601(blocked.blocked_at),
@@ -222,6 +228,13 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: StatusDashboard.humanize_codex_message(message)
+
+  defp agent_payload(entry) when is_map(entry) do
+    %{
+      harness: Map.get(entry, :agent_harness),
+      model: Map.get(entry, :agent_model)
+    }
+  end
 
   defp due_at_iso8601(due_in_ms) when is_integer(due_in_ms) do
     DateTime.utc_now()

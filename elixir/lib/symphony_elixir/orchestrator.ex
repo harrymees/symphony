@@ -7,6 +7,7 @@ defmodule SymphonyElixir.Orchestrator do
   require Logger
   import Bitwise, only: [<<<: 2]
 
+  alias SymphonyElixir.Agent.Selection
   alias SymphonyElixir.{AgentRunner, Config, StatusDashboard, Tracker, Workspace}
   alias SymphonyElixir.Linear.Issue
 
@@ -940,13 +941,26 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host) do
+    case Selection.resolve(issue) do
+      {:ok, agent_selection} ->
+        do_spawn_issue_on_worker_host(state, issue, attempt, recipient, worker_host, agent_selection)
+
+      {:error, reason} ->
+        Logger.warning("Skipping dispatch; agent selection failed for #{issue_context(issue)}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp do_spawn_issue_on_worker_host(%State{} = state, issue, attempt, recipient, worker_host, agent_selection) do
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
-           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host)
+           AgentRunner.run(issue, recipient, attempt: attempt, worker_host: worker_host, agent_selection: agent_selection)
          end) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
 
-        Logger.info("Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"}")
+        Logger.info(
+          "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} harness=#{agent_selection.harness} model=#{agent_selection.model || "default"}"
+        )
 
         running =
           Map.put(state.running, issue.id, %{
@@ -954,6 +968,9 @@ defmodule SymphonyElixir.Orchestrator do
             ref: ref,
             identifier: issue.identifier,
             issue: issue,
+            agent_harness: agent_selection.harness,
+            agent_model: agent_selection.model,
+            agent_selection_source: agent_selection.source,
             worker_host: worker_host,
             workspace_path: nil,
             session_id: nil,
@@ -987,6 +1004,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: issue.identifier,
           issue_url: issue.url,
           error: "failed to spawn agent: #{inspect(reason)}",
+          agent_harness: agent_selection.harness,
+          agent_model: agent_selection.model,
           worker_host: worker_host
         })
     end
@@ -1379,6 +1398,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: metadata.identifier,
           issue_url: metadata.issue.url,
           state: metadata.issue.state,
+          agent_harness: Map.get(metadata, :agent_harness),
+          agent_model: Map.get(metadata, :agent_model),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: metadata.session_id,
@@ -1418,6 +1439,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(metadata, :identifier),
           issue_url: blocked_issue_url(metadata),
           state: blocked_issue_state(metadata),
+          agent_harness: Map.get(metadata, :agent_harness),
+          agent_model: Map.get(metadata, :agent_model),
           worker_host: Map.get(metadata, :worker_host),
           workspace_path: Map.get(metadata, :workspace_path),
           session_id: Map.get(metadata, :session_id),
@@ -1471,6 +1494,8 @@ defmodule SymphonyElixir.Orchestrator do
     codex_output_tokens = Map.get(running_entry, :codex_output_tokens, 0)
     codex_total_tokens = Map.get(running_entry, :codex_total_tokens, 0)
     codex_app_server_pid = Map.get(running_entry, :codex_app_server_pid)
+    agent_harness = Map.get(update, :agent_harness) || Map.get(running_entry, :agent_harness)
+    agent_model = Map.get(update, :agent_model) || Map.get(running_entry, :agent_model)
     last_reported_input = Map.get(running_entry, :codex_last_reported_input_tokens, 0)
     last_reported_output = Map.get(running_entry, :codex_last_reported_output_tokens, 0)
     last_reported_total = Map.get(running_entry, :codex_last_reported_total_tokens, 0)
@@ -1480,6 +1505,8 @@ defmodule SymphonyElixir.Orchestrator do
       Map.merge(running_entry, %{
         last_codex_timestamp: timestamp,
         last_codex_message: summarize_codex_update(update),
+        agent_harness: agent_harness,
+        agent_model: agent_model,
         session_id: session_id_for_update(running_entry.session_id, update),
         last_codex_event: event,
         codex_app_server_pid: codex_app_server_pid_for_update(codex_app_server_pid, update),

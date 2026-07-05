@@ -6,6 +6,7 @@ defmodule SymphonyElixir.TestSupport do
       use ExUnit.Case
       import ExUnit.CaptureLog
 
+      alias SymphonyElixir.Agent.Selection
       alias SymphonyElixir.AgentRunner
       alias SymphonyElixir.CLI
       alias SymphonyElixir.Codex.AppServer
@@ -104,6 +105,8 @@ defmodule SymphonyElixir.TestSupport do
           workspace_root: Path.join(System.tmp_dir!(), "symphony_workspaces"),
           worker_ssh_hosts: [],
           worker_max_concurrent_agents_per_host: nil,
+          agent_harness: "codex",
+          agent_model: nil,
           max_concurrent_agents: 10,
           max_turns: 20,
           max_retry_backoff_ms: 300_000,
@@ -115,6 +118,10 @@ defmodule SymphonyElixir.TestSupport do
           codex_turn_timeout_ms: 3_600_000,
           codex_read_timeout_ms: 5_000,
           codex_stall_timeout_ms: 300_000,
+          claude_code_command: "claude -p --output-format json --permission-mode bypassPermissions --max-turns {{ max_turns }} {{ model_arg }} {{ prompt }}",
+          claude_code_turn_timeout_ms: 3_600_000,
+          opencode_command: "opencode run {{ prompt }} {{ model_arg }}",
+          opencode_turn_timeout_ms: 3_600_000,
           hook_after_create: nil,
           hook_before_run: nil,
           hook_after_run: nil,
@@ -142,6 +149,8 @@ defmodule SymphonyElixir.TestSupport do
     workspace_root = Keyword.get(config, :workspace_root)
     worker_ssh_hosts = Keyword.get(config, :worker_ssh_hosts)
     worker_max_concurrent_agents_per_host = Keyword.get(config, :worker_max_concurrent_agents_per_host)
+    agent_harness = Keyword.get(config, :agent_harness)
+    agent_model = Keyword.get(config, :agent_model)
     max_concurrent_agents = Keyword.get(config, :max_concurrent_agents)
     max_turns = Keyword.get(config, :max_turns)
     max_retry_backoff_ms = Keyword.get(config, :max_retry_backoff_ms)
@@ -153,6 +162,10 @@ defmodule SymphonyElixir.TestSupport do
     codex_turn_timeout_ms = Keyword.get(config, :codex_turn_timeout_ms)
     codex_read_timeout_ms = Keyword.get(config, :codex_read_timeout_ms)
     codex_stall_timeout_ms = Keyword.get(config, :codex_stall_timeout_ms)
+    claude_code_command = Keyword.get(config, :claude_code_command)
+    claude_code_turn_timeout_ms = Keyword.get(config, :claude_code_turn_timeout_ms)
+    opencode_command = Keyword.get(config, :opencode_command)
+    opencode_turn_timeout_ms = Keyword.get(config, :opencode_turn_timeout_ms)
     hook_after_create = Keyword.get(config, :hook_after_create)
     hook_before_run = Keyword.get(config, :hook_before_run)
     hook_after_run = Keyword.get(config, :hook_after_run)
@@ -183,6 +196,8 @@ defmodule SymphonyElixir.TestSupport do
         "  root: #{yaml_value(workspace_root)}",
         worker_yaml(worker_ssh_hosts, worker_max_concurrent_agents_per_host),
         "agent:",
+        "  harness: #{yaml_value(agent_harness)}",
+        "  model: #{yaml_value(agent_model)}",
         "  max_concurrent_agents: #{yaml_value(max_concurrent_agents)}",
         "  max_turns: #{yaml_value(max_turns)}",
         "  max_retry_backoff_ms: #{yaml_value(max_retry_backoff_ms)}",
@@ -195,6 +210,12 @@ defmodule SymphonyElixir.TestSupport do
         "  turn_timeout_ms: #{yaml_value(codex_turn_timeout_ms)}",
         "  read_timeout_ms: #{yaml_value(codex_read_timeout_ms)}",
         "  stall_timeout_ms: #{yaml_value(codex_stall_timeout_ms)}",
+        "claude_code:",
+        "  command: #{yaml_value(claude_code_command)}",
+        "  turn_timeout_ms: #{yaml_value(claude_code_turn_timeout_ms)}",
+        "opencode:",
+        "  command: #{yaml_value(opencode_command)}",
+        "  turn_timeout_ms: #{yaml_value(opencode_turn_timeout_ms)}",
         hooks_yaml(hook_after_create, hook_before_run, hook_after_run, hook_before_remove, hook_timeout_ms),
         observability_yaml(observability_enabled, observability_refresh_ms, observability_render_interval_ms),
         server_yaml(server_port, server_host),

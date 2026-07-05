@@ -139,6 +139,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                 <colgroup>
                   <col style="width: 12rem;" />
                   <col style="width: 8rem;" />
+                  <col style="width: 9rem;" />
                   <col style="width: 7.5rem;" />
                   <col style="width: 8.5rem;" />
                   <col />
@@ -148,9 +149,10 @@ defmodule SymphonyElixirWeb.DashboardLive do
                   <tr>
                     <th>Issue</th>
                     <th>State</th>
+                    <th>Agent</th>
                     <th>Session</th>
                     <th>Runtime / turns</th>
-                    <th>Codex update</th>
+                    <th>Agent update</th>
                     <th>Tokens</th>
                   </tr>
                 </thead>
@@ -167,6 +169,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <%= entry.state %>
                       </span>
                     </td>
+                    <td class="mono"><%= format_agent(entry.agent) %></td>
                     <td>
                       <div class="session-stack">
                         <%= if entry.session_id do %>
@@ -216,7 +219,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
           <div class="section-header">
             <div>
               <h2 class="section-title">Blocked sessions</h2>
-              <p class="section-copy">Issues paused because Codex requested operator input or approval.</p>
+              <p class="section-copy">Issues paused because an agent requested operator input or approval.</p>
             </div>
           </div>
 
@@ -224,11 +227,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="empty-state">No blocked sessions.</p>
           <% else %>
             <div class="table-wrap">
-              <table class="data-table" style="min-width: 760px;">
+              <table class="data-table" style="min-width: 860px;">
                 <thead>
                   <tr>
                     <th>Issue</th>
                     <th>State</th>
+                    <th>Agent</th>
                     <th>Session</th>
                     <th>Blocked at</th>
                     <th>Last update</th>
@@ -248,6 +252,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                         <%= entry.state || "Blocked" %>
                       </span>
                     </td>
+                    <td class="mono"><%= format_agent(entry.agent) %></td>
                     <td>
                       <%= if entry.session_id do %>
                         <button
@@ -298,11 +303,12 @@ defmodule SymphonyElixirWeb.DashboardLive do
             <p class="empty-state">No issues are currently backing off.</p>
           <% else %>
             <div class="table-wrap">
-              <table class="data-table" style="min-width: 680px;">
+              <table class="data-table" style="min-width: 780px;">
                 <thead>
                   <tr>
                     <th>Issue</th>
                     <th>Attempt</th>
+                    <th>Agent</th>
                     <th>Due at</th>
                     <th>Error</th>
                   </tr>
@@ -316,6 +322,7 @@ defmodule SymphonyElixirWeb.DashboardLive do
                       </div>
                     </td>
                     <td><%= entry.attempt %></td>
+                    <td class="mono"><%= format_agent(entry.agent) %></td>
                     <td class="mono"><%= entry.due_at || "n/a" %></td>
                     <td><%= entry.error || "n/a" %></td>
                   </tr>
@@ -424,6 +431,17 @@ defmodule SymphonyElixirWeb.DashboardLive do
   end
 
   defp format_int(_value), do: "n/a"
+
+  defp format_agent(%{harness: harness, model: model}) do
+    case {harness, model} do
+      {nil, nil} -> "default"
+      {harness, nil} -> to_string(harness)
+      {nil, model} -> to_string(model)
+      {harness, model} -> "#{harness} / #{model}"
+    end
+  end
+
+  defp format_agent(_agent), do: "default"
 
   defp state_badge_class(state) do
     base = "state-badge"

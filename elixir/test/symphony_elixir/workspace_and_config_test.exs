@@ -319,6 +319,54 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     refute Issue.routable?(%{issue | assigned_to_worker: false}, ["symphony"])
   end
 
+  test "agent selection defaults to workflow harness and model" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      agent_harness: "claude-code",
+      agent_model: "claude-sonnet-4-5"
+    )
+
+    issue = %Issue{id: "issue-agent-default", identifier: "MT-AGENT", labels: []}
+
+    assert {:ok, %{harness: "claude_code", model: "claude-sonnet-4-5", source: :workflow}} =
+             Selection.resolve(issue)
+  end
+
+  test "agent selection supports deterministic Linear label overrides" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      agent_harness: "codex",
+      agent_model: "gpt-5.5"
+    )
+
+    claude_issue = %Issue{
+      id: "issue-agent-claude",
+      identifier: "MT-CLAUDE",
+      labels: ["harness:claude-code", "model:claude-sonnet-4-5"]
+    }
+
+    glm_issue = %Issue{
+      id: "issue-agent-glm",
+      identifier: "MT-GLM",
+      labels: ["agent:glm", "model:zai-coding-plan/glm-5.2"]
+    }
+
+    assert {:ok, %{harness: "claude_code", model: "claude-sonnet-4-5", source: :issue_label}} =
+             Selection.resolve(claude_issue)
+
+    assert {:ok, %{harness: "opencode", model: "zai-coding-plan/glm-5.2", source: :issue_label}} =
+             Selection.resolve(glm_issue)
+  end
+
+  test "agent selection rejects conflicting issue labels instead of picking a random harness" do
+    issue = %Issue{
+      id: "issue-agent-conflict",
+      identifier: "MT-CONFLICT",
+      labels: ["harness:claude-code", "harness:opencode"]
+    }
+
+    assert {:error, {:conflicting_issue_agent_directives, :harness, ["claude_code", "opencode"]}} =
+             Selection.resolve(issue)
+  end
+
   test "linear client normalizes blockers from inverse relations" do
     raw_issue = %{
       "id" => "issue-1",
