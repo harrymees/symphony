@@ -6,7 +6,6 @@ tracker:
   active_states:
     - Todo
     - In Progress
-    - Human Review
     - Rework
     - Merging
   terminal_states:
@@ -151,7 +150,7 @@ Continuation context:
 - This is retry attempt #{{ attempt }} because the ticket is still in an active state.
 - Resume from the current workspace state instead of restarting from scratch.
 - Do not repeat already-completed investigation or validation unless needed for new code changes.
-- Do not end the turn while the issue remains in an active state unless you are blocked by missing required permissions/secrets.
+- Do not end the turn while the issue remains in an active implementation state unless you are blocked by missing required permissions/secrets. `Human Review` is an explicit human-wait state: do not merge or make code changes there.
   {% endif %}
 
 Issue context:
@@ -206,7 +205,7 @@ The agent should be able to talk to Linear either via a configured Linear MCP se
 - `commit`: produce clean, logical commits during implementation.
 - `push`: keep remote branch current and publish updates.
 - `pull`: keep branch updated with latest `origin/main` before handoff.
-- `land`: when ticket reaches `Merging`, explicitly open and follow `.agents/skills/land/SKILL.md`, which includes the `land` loop.
+- `land`: when ticket reaches `Merging` with verified human merge authorization, explicitly open and follow `.agents/skills/land/SKILL.md`, which includes the `land` loop.
 
 ## Status map
 
@@ -215,8 +214,8 @@ The agent should be able to talk to Linear either via a configured Linear MCP se
   - Special case: if a PR is already attached, treat as feedback/rework loop (run full PR feedback sweep, address or explicitly push back, revalidate, return to `Human Review`).
 - `In Progress` -> implementation actively underway.
 - `Blocked on Human` -> the agent is blocked on an external human action it cannot resolve itself (for example missing scopes, credentials, permissions, or tool access). Leave a concise blocker comment on the Linear issue, move the issue here, then stop until a human replies or moves the issue to a different state.
-- `Human Review` -> PR is attached and validated; waiting on human approval.
-- `Merging` -> approved by human; execute the `land` skill flow (do not call `gh pr merge` directly).
+- `Human Review` -> PR is attached and validated; waiting on human approval. This is an idle state for agents: do not merge, do not run `land`, and do not make code/workpad changes just because CI is green.
+- `Merging` -> merge may proceed only after the merge-authorization gate below passes; execute the `land` skill flow (do not call `gh pr merge` directly).
 - `Rework` -> reviewer requested changes; planning + implementation required.
 - `Done` -> terminal state; no further action required.
 
@@ -230,8 +229,8 @@ The agent should be able to talk to Linear either via a configured Linear MCP se
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
    - `Blocked on Human` -> do nothing; wait for a human reply or for the issue to be moved into a different state before re-engaging.
-   - `Human Review` -> wait and poll for decision/review updates.
-   - `Merging` -> on entry, open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
+   - `Human Review` -> stop after checking for actionable feedback; never merge from this state. A green PR, `reviewDecision: ""`, no comments, or a Linear/GitHub integration update is not approval.
+   - `Merging` -> on entry, first verify the merge-authorization gate below. If it passes, open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly. If it does not pass, do not merge.
    - `Rework` -> run rework flow.
    - `Done` -> do nothing and shut down.
 4. Check whether a PR already exists for the current branch and whether it is closed.
@@ -361,14 +360,18 @@ Use this only when completion is blocked by missing required tools or missing au
 
 ## Step 3: Human Review and merge handling
 
-1. When the issue is in `Human Review`, do not code or change ticket content.
+1. When the issue is in `Human Review`, do not code, do not change ticket content, do not run the `land` skill, and do not call `gh pr merge`. Human Review is a hard stop for merging.
 2. Poll for updates as needed in both Linear and GitHub, including Linear issue comments plus GitHub PR review comments and PR comments from humans and bots.
    - For newly seen actionable comments, add `👀` while they are being worked.
 3. If either Linear or GitHub feedback indicates additional changes are needed, move the issue to `Rework` and follow the rework flow.
    - After the requested follow-up is complete, replace the `👀` reaction on those comments with `🟢`.
-4. If approved, human moves the issue to `Merging`.
-5. When the issue is in `Merging`, open and follow `.agents/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
-6. After merge is complete, move the issue to `Done`.
+4. Merge authorization is required before landing any PR. Exactly two signals are valid:
+   - **GitHub approval:** a human GitHub reviewer has submitted an `APPROVED` PR review for the current PR head commit. Do not submit this approval yourself. `reviewDecision: ""`, no required reviews, passing checks, or no comments are not approval.
+   - **Manual Linear approval:** a human manually moved the Linear issue to `Merging`. A Linear state change made by the GitHub integration, GitHub automation, a bot, or an agent is not manual approval. If you cannot verify the `Merging` transition was human-authored, assume it is not authorized.
+5. If a GitHub human approval is present while the issue is still in `Human Review`, record the approval evidence and move the issue to `Merging` before landing so no merge happens while the issue remains in `Human Review`.
+6. When the issue is in `Merging`, first verify the merge-authorization gate above. If the gate passes, open and follow `.agents/skills/land/SKILL.md`, then run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly.
+7. If the gate does not pass, do not merge, do not move the issue to `Done`, and leave a concise blocker comment explaining that the PR still needs either a human GitHub approval or a human-authored Linear move to `Merging`.
+8. After merge is complete, move the issue to `Done`.
 
 ## Step 4: Rework handling
 
@@ -405,7 +408,8 @@ Use this only when completion is blocked by missing required tools or missing au
   link to the current issue, and `blockedBy` when the follow-up depends on the
   current issue.
 - Do not move to `Human Review` unless the `Completion bar before Human Review` is satisfied.
-- In `Human Review`, do not make changes; wait and poll.
+- In `Human Review`, do not make changes and never merge; wait for actionable feedback, a human GitHub approval, or a human-authored move to `Merging`.
+- Never treat GitHub/Linear integration auto-transitions to `Merging` as merge authorization. Verify the transition actor or require a human GitHub approval before landing.
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
 - If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action.
