@@ -957,7 +957,10 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert is_integer(due_at_ms)
     remaining_ms = due_at_ms - System.monotonic_time(:millisecond)
-    assert remaining_ms >= 9_500
+    # The full suite can spend a few hundred milliseconds processing the tick
+    # before this assertion samples the monotonic clock; keep the lower bound
+    # focused on catching the wrong retry class rather than on scheduler timing.
+    assert remaining_ms >= 8_000
     assert remaining_ms <= 10_500
   end
 

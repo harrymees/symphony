@@ -48,6 +48,31 @@ defmodule SymphonyElixir.Orchestrator do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @spec notify_linear_webhook(String.t(), map()) :: {:ok, map()} | :unavailable
+  def notify_linear_webhook(issue_id, metadata \\ %{}) do
+    notify_linear_webhook(__MODULE__, issue_id, metadata)
+  end
+
+  @spec notify_linear_webhook(GenServer.server(), String.t(), map()) :: {:ok, map()} | :unavailable
+  def notify_linear_webhook(server, issue_id, metadata)
+      when is_binary(issue_id) and is_map(metadata) do
+    if server_available?(server) do
+      GenServer.cast(server, {:linear_webhook, issue_id, metadata})
+
+      {:ok,
+       %{
+         queued: true,
+         issue_id: issue_id,
+         operations: ["issue_refresh"],
+         source: "linear_webhook"
+       }}
+    else
+      :unavailable
+    end
+  end
+
+  def notify_linear_webhook(_server, _issue_id, _metadata), do: :unavailable
+
   @impl true
   def init(_opts) do
     now_ms = System.monotonic_time(:millisecond)
@@ -68,6 +93,18 @@ defmodule SymphonyElixir.Orchestrator do
     state = schedule_tick(state, 0)
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_cast({:linear_webhook, issue_id, metadata}, state)
+      when is_binary(issue_id) and is_map(metadata) do
+    state =
+      state
+      |> refresh_runtime_config()
+      |> handle_linear_webhook_issue(issue_id, metadata)
+
+    notify_dashboard()
+    {:noreply, state}
   end
 
   @impl true
@@ -268,6 +305,60 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       false ->
+        state
+    end
+  end
+
+  defp handle_linear_webhook_issue(%State{} = state, issue_id, metadata) do
+    case Config.validate!() do
+      :ok ->
+        refresh_issue_from_webhook(state, issue_id, metadata)
+
+      {:error, reason} ->
+        Logger.warning("Skipping Linear webhook issue refresh issue_id=#{issue_id}; invalid config: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp refresh_issue_from_webhook(%State{} = state, issue_id, metadata) do
+    case Tracker.fetch_issue_states_by_ids([issue_id]) do
+      {:ok, [%Issue{} = issue | _]} ->
+        Logger.info("Linear webhook triggered issue refresh: #{issue_context(issue)} action=#{inspect(metadata[:action])}")
+        maybe_process_refreshed_webhook_issue(state, issue)
+
+      {:ok, []} ->
+        Logger.info("Linear webhook issue no longer visible: issue_id=#{issue_id}")
+        release_issue_claim(state, issue_id)
+
+      {:error, reason} ->
+        Logger.warning("Linear webhook issue refresh failed issue_id=#{issue_id}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp maybe_process_refreshed_webhook_issue(%State{} = state, %Issue{} = issue) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    state =
+      if Map.has_key?(state.running, issue.id) do
+        reconcile_issue_state(issue, state, active_states, terminal_states)
+      else
+        state
+      end
+
+    cond do
+      should_dispatch_issue?(issue, state, active_states, terminal_states) ->
+        dispatch_issue(state, issue)
+
+      terminal_issue_state?(issue.state, terminal_states) ->
+        cleanup_issue_workspace(issue.identifier)
+        release_issue_claim(state, issue.id)
+
+      !candidate_issue?(issue, active_states, terminal_states) ->
+        release_issue_claim(state, issue.id)
+
+      true ->
         state
     end
   end
@@ -1137,12 +1228,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   @spec request_refresh(GenServer.server()) :: map() | :unavailable
   def request_refresh(server) do
-    if Process.whereis(server) do
+    if server_available?(server) do
       GenServer.call(server, :request_refresh)
     else
       :unavailable
     end
   end
+
+  defp server_available?(server) when is_atom(server), do: Process.whereis(server) != nil
+  defp server_available?(server) when is_pid(server), do: Process.alive?(server)
+  defp server_available?(_server), do: true
 
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)

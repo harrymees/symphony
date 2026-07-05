@@ -75,6 +75,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     def handle_call(:request_refresh, _from, state) do
       {:reply, Keyword.get(state, :refresh, :unavailable), state}
     end
+
+    def handle_cast({:linear_webhook, issue_id, metadata}, state) do
+      if recipient = Keyword.get(state, :recipient) do
+        send(recipient, {:linear_webhook_received, issue_id, metadata})
+      end
+
+      {:noreply, state}
+    end
   end
 
   setup do
@@ -425,6 +433,103 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"queued" => true, "coalesced" => false, "operations" => ["poll", "reconcile"]} =
              json_response(conn, 202)
+  end
+
+  test "linear webhook endpoint verifies signature, timestamp, and project before issue refresh" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      webhook_linear_secret: "webhook-secret",
+      webhook_linear_project_id: "project-id"
+    )
+
+    orchestrator_name = Module.concat(__MODULE__, :LinearWebhookOrchestrator)
+
+    {:ok, _pid} =
+      StaticOrchestrator.start_link(
+        name: orchestrator_name,
+        snapshot: static_snapshot(),
+        recipient: self()
+      )
+
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    body =
+      Jason.encode!(%{
+        type: "Issue",
+        action: "update",
+        webhookTimestamp: System.system_time(:millisecond),
+        data: %{id: "issue-webhook", identifier: "HAR-123", projectId: "project-id"}
+      })
+
+    bad_conn =
+      build_conn()
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Plug.Conn.put_req_header("linear-signature", "bad-signature")
+      |> post("/api/v1/linear/webhook", body)
+
+    assert json_response(bad_conn, 401) ==
+             %{"error" => %{"code" => "invalid_signature", "message" => "Invalid webhook signature"}}
+
+    stale_body =
+      Jason.encode!(%{
+        type: "Issue",
+        action: "update",
+        webhookTimestamp: System.system_time(:millisecond) - 120_000,
+        data: %{id: "issue-webhook", identifier: "HAR-123", projectId: "project-id"}
+      })
+
+    stale_signature =
+      :crypto.mac(:hmac, :sha256, "webhook-secret", stale_body)
+      |> Base.encode16(case: :lower)
+
+    stale_conn =
+      build_conn()
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Plug.Conn.put_req_header("linear-signature", stale_signature)
+      |> post("/api/v1/linear/webhook", stale_body)
+
+    assert json_response(stale_conn, 401) ==
+             %{"error" => %{"code" => "stale_timestamp", "message" => "Stale Linear webhook timestamp"}}
+
+    signature =
+      :crypto.mac(:hmac, :sha256, "webhook-secret", body)
+      |> Base.encode16(case: :lower)
+
+    conn =
+      build_conn()
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Plug.Conn.put_req_header("linear-signature", signature)
+      |> post("/api/v1/linear/webhook", body)
+
+    assert %{"queued" => true, "issue_id" => "issue-webhook", "operations" => ["issue_refresh"]} =
+             json_response(conn, 200)
+
+    assert_receive {:linear_webhook_received, "issue-webhook", metadata}
+    assert metadata[:source] == :linear_webhook
+    assert metadata[:identifier] == "HAR-123"
+    assert metadata[:project_id] == "project-id"
+
+    mismatch_body =
+      Jason.encode!(%{
+        type: "Issue",
+        action: "update",
+        webhookTimestamp: System.system_time(:millisecond),
+        data: %{id: "issue-other", identifier: "HAR-999", projectId: "other-project"}
+      })
+
+    mismatch_signature =
+      :crypto.mac(:hmac, :sha256, "webhook-secret", mismatch_body)
+      |> Base.encode16(case: :lower)
+
+    mismatch_conn =
+      build_conn()
+      |> Plug.Conn.put_req_header("content-type", "application/json")
+      |> Plug.Conn.put_req_header("linear-signature", mismatch_signature)
+      |> post("/api/v1/linear/webhook", mismatch_body)
+
+    assert %{"queued" => false, "ignored" => true, "reason" => "project_mismatch"} =
+             json_response(mismatch_conn, 200)
+
+    refute_receive {:linear_webhook_received, "issue-other", _metadata}, 50
   end
 
   test "phoenix observability api preserves 405, 404, and unavailable behavior" do
