@@ -25,6 +25,7 @@ This host now has:
   - `/home/airhorns/code/shopify-draft-proxy/WORKFLOW.md`
   - `/home/airhorns/code/durababble/WORKFLOW.md`
   - `/home/airhorns/code/shot-caller/WORKFLOW.md`
+  - `/home/airhorns/code/symphony/elixir/deploy/workflows/shot-caller.WORKFLOW.template.md`
 - Env files:
   - `/home/airhorns/code/symphony/elixir/deploy/env/jam.env`
   - `/home/airhorns/code/symphony/elixir/deploy/env/shopify-draft-proxy.env`
@@ -68,7 +69,7 @@ Render a workflow to inspect the concrete config without starting Symphony:
 ```bash
 /home/airhorns/code/symphony/elixir/deploy/run-workflow.sh \
   /home/airhorns/code/symphony/elixir/deploy/env/shot-caller.env \
-  /home/airhorns/code/shot-caller/WORKFLOW.md \
+  /home/airhorns/code/symphony/elixir/deploy/workflows/shot-caller.WORKFLOW.template.md \
   --render-only
 ```
 
@@ -107,7 +108,7 @@ XDG_RUNTIME_DIR=/run/user/$(id -u) journalctl --user -u symphony-shot-caller.ser
 
 ## Notes
 
-- `shot-caller` uses `CODING_HARNESS=opencode` with `OPENCODE_MODEL=openrouter/z-ai/glm-5.2`; its workspace bootstrap runs `lnai sync` so `AGENTS.md` and `.agents/skills/*` are symlinked from `.ai/` before `direnv allow`. `LINEAR_PROJECT_SLUG` remains `REPLACE_ME` until the Linear API rate limit resets and the project can be created.
+- `shot-caller` uses `CODING_HARNESS=opencode` with `OPENCODE_MODEL=openrouter/z-ai/glm-5.2`; its workspace bootstrap runs `lnai sync` + `lnai validate`, creates `.env` as a symlink to `/home/airhorns/code/shot-caller/.env.shared`, and shares caches under `/home/airhorns/.cache/shot-caller`, and links `.venv` to `/home/airhorns/code/shot-caller/.venv` before `direnv allow`. The OpenCode bridge sets `OPENCODE_DISABLE_CLAUDE_CODE=1`; shot-caller agents should use `AGENTS.md` and `.agents/skills/*`, never `.claude`.
 - `shopify-draft-proxy` and `shot-caller` use Linear webhooks as the primary trigger. Their workflow polling intervals are set to `10800000` ms (3h) as a backup only.
 - Public ingress for Linear is intentionally narrow: Kubernetes/Traefik exposes only the exact `/api/v1/linear/webhook` path on `linear-shopify-draft-proxy.shot-caller.win` and `linear-shot-caller.shot-caller.win`, routing to Thompson ports `4312` and `4314` respectively. Webhook HMAC secrets live only in the corresponding env files as `LINEAR_WEBHOOK_SECRET`; project prefilter IDs live in `LINEAR_PROJECT_ID` so unrelated webhook deliveries can be ignored before any Linear API call.
 - `shopify-draft-proxy` bootstraps `.env.example` to `.env` inside each workspace if no `.env` exists yet. Real live-conformance credentials may still be required for some tasks.

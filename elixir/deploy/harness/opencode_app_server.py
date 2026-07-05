@@ -194,6 +194,10 @@ def _run_opencode(cwd: str, prompt: str, title: str | None) -> tuple[int, str, d
     global _child
 
     env = _load_hermes_env_if_requested(os.environ.copy())
+    # Keep OpenCode from loading Claude Code compatibility prompts or skills
+    # from any .claude directory. Shot-caller uses LNAI-generated AGENTS.md and
+    # .agents/skills/* as the single agent-facing source of truth.
+    env.setdefault("OPENCODE_DISABLE_CLAUDE_CODE", "1")
     env["PATH"] = ":".join(
         [
             str(Path.home() / ".local/bin"),
