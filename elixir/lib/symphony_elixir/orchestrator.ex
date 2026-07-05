@@ -49,6 +49,31 @@ defmodule SymphonyElixir.Orchestrator do
     GenServer.start_link(__MODULE__, opts, name: name)
   end
 
+  @spec notify_linear_webhook(String.t(), map()) :: {:ok, map()} | :unavailable
+  def notify_linear_webhook(issue_id, metadata \\ %{}) do
+    notify_linear_webhook(__MODULE__, issue_id, metadata)
+  end
+
+  @spec notify_linear_webhook(GenServer.server(), String.t(), map()) :: {:ok, map()} | :unavailable
+  def notify_linear_webhook(server, issue_id, metadata)
+      when is_binary(issue_id) and is_map(metadata) do
+    if server_available?(server) do
+      GenServer.cast(server, {:linear_webhook, issue_id, metadata})
+
+      {:ok,
+       %{
+         queued: true,
+         issue_id: issue_id,
+         operations: ["issue_refresh"],
+         source: "linear_webhook"
+       }}
+    else
+      :unavailable
+    end
+  end
+
+  def notify_linear_webhook(_server, _issue_id, _metadata), do: :unavailable
+
   @impl true
   def init(_opts) do
     now_ms = System.monotonic_time(:millisecond)
@@ -69,6 +94,18 @@ defmodule SymphonyElixir.Orchestrator do
     state = schedule_tick(state, 0)
 
     {:ok, state}
+  end
+
+  @impl true
+  def handle_cast({:linear_webhook, issue_id, metadata}, state)
+      when is_binary(issue_id) and is_map(metadata) do
+    state =
+      state
+      |> refresh_runtime_config()
+      |> handle_linear_webhook_issue(issue_id, metadata)
+
+    notify_dashboard()
+    {:noreply, state}
   end
 
   @impl true
@@ -299,6 +336,60 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp handle_linear_webhook_issue(%State{} = state, issue_id, metadata) do
+    case Config.validate!() do
+      :ok ->
+        refresh_issue_from_webhook(state, issue_id, metadata)
+
+      {:error, reason} ->
+        Logger.warning("Skipping Linear webhook issue refresh issue_id=#{issue_id}; invalid config: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp refresh_issue_from_webhook(%State{} = state, issue_id, metadata) do
+    case Tracker.fetch_issue_states_by_ids([issue_id]) do
+      {:ok, [%Issue{} = issue | _]} ->
+        Logger.info("Linear webhook triggered issue refresh: #{issue_context(issue)} action=#{inspect(metadata[:action])}")
+        maybe_process_refreshed_webhook_issue(state, issue)
+
+      {:ok, []} ->
+        Logger.info("Linear webhook issue no longer visible: issue_id=#{issue_id}")
+        release_issue_claim(state, issue_id)
+
+      {:error, reason} ->
+        Logger.warning("Linear webhook issue refresh failed issue_id=#{issue_id}: #{inspect(reason)}")
+        state
+    end
+  end
+
+  defp maybe_process_refreshed_webhook_issue(%State{} = state, %Issue{} = issue) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    state =
+      if Map.has_key?(state.running, issue.id) do
+        reconcile_issue_state(issue, state, active_states, terminal_states)
+      else
+        state
+      end
+
+    cond do
+      should_dispatch_issue?(issue, state, active_states, terminal_states) ->
+        dispatch_issue(state, issue)
+
+      terminal_issue_state?(issue.state, terminal_states) ->
+        cleanup_issue_workspace(issue.identifier)
+        release_issue_claim(state, issue.id)
+
+      !candidate_issue?(issue, active_states, terminal_states) ->
+        release_issue_claim(state, issue.id)
+
+      true ->
+        state
+    end
+  end
+
   defp reconcile_running_issues(%State{} = state) do
     state = reconcile_stalled_running_issues(state)
     running_ids = Map.keys(state.running)
@@ -397,6 +488,20 @@ defmodule SymphonyElixir.Orchestrator do
   @spec select_worker_host_for_test(term(), String.t() | nil) :: String.t() | nil | :no_worker_capacity
   def select_worker_host_for_test(%State{} = state, preferred_worker_host) do
     select_worker_host(state, preferred_worker_host)
+  end
+
+  @doc false
+  @spec dispatch_issue_for_test(State.t(), Issue.t(), integer() | nil, String.t() | nil, ([String.t()] -> term())) ::
+          State.t()
+  def dispatch_issue_for_test(
+        %State{} = state,
+        %Issue{} = issue,
+        attempt,
+        preferred_worker_host,
+        issue_fetcher
+      )
+      when is_function(issue_fetcher, 1) do
+    dispatch_issue_with_fetcher(state, issue, attempt, preferred_worker_host, issue_fetcher)
   end
 
   defp reconcile_running_issue_states([], state, _active_states, _terminal_states), do: state
@@ -907,22 +1012,41 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_issue(%State{} = state, issue, attempt \\ nil, preferred_worker_host \\ nil) do
-    case revalidate_issue_for_dispatch(issue, &Tracker.fetch_issue_states_by_ids/1, terminal_state_set()) do
+    dispatch_issue_with_fetcher(
+      state,
+      issue,
+      attempt,
+      preferred_worker_host,
+      &Tracker.fetch_issue_states_by_ids/1
+    )
+  end
+
+  defp dispatch_issue_with_fetcher(%State{} = state, issue, attempt, preferred_worker_host, issue_fetcher)
+       when is_function(issue_fetcher, 1) do
+    case revalidate_issue_for_dispatch(issue, issue_fetcher, terminal_state_set()) do
       {:ok, %Issue{} = refreshed_issue} ->
         do_dispatch_issue(state, refreshed_issue, attempt, preferred_worker_host)
 
       {:skip, :missing} ->
         Logger.info("Skipping dispatch; issue no longer active or visible: #{issue_context(issue)}")
-        state
+
+        maybe_release_retry_claim(state, issue.id, attempt)
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info("Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} blocked_by=#{length(refreshed_issue.blocked_by)}")
 
-        state
+        maybe_release_retry_claim(state, refreshed_issue.id || issue.id, attempt)
 
       {:error, reason} ->
         Logger.warning("Skipping dispatch; issue refresh failed for #{issue_context(issue)}: #{inspect(reason)}")
-        state
+
+        maybe_reschedule_retry_after_refresh_error(
+          state,
+          issue,
+          attempt,
+          preferred_worker_host,
+          reason
+        )
     end
   end
 
@@ -1180,6 +1304,37 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp maybe_release_retry_claim(%State{} = state, issue_id, attempt)
+       when is_binary(issue_id) and is_integer(attempt) and attempt > 0 do
+    release_issue_claim(state, issue_id)
+  end
+
+  defp maybe_release_retry_claim(%State{} = state, _issue_id, _attempt), do: state
+
+  defp maybe_reschedule_retry_after_refresh_error(
+         %State{} = state,
+         %Issue{} = issue,
+         attempt,
+         preferred_worker_host,
+         reason
+       )
+       when is_integer(attempt) and attempt > 0 do
+    schedule_issue_retry(state, issue.id, attempt + 1, %{
+      identifier: issue.identifier,
+      error: "issue refresh failed: #{inspect(reason)}",
+      worker_host: preferred_worker_host
+    })
+  end
+
+  defp maybe_reschedule_retry_after_refresh_error(
+         %State{} = state,
+         _issue,
+         _attempt,
+         _preferred_worker_host,
+         _reason
+       ),
+       do: state
+
   defp release_issue_claim(%State{} = state, issue_id) do
     %{
       state
@@ -1341,12 +1496,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   @spec request_refresh(GenServer.server()) :: map() | :unavailable
   def request_refresh(server) do
-    if Process.whereis(server) do
+    if server_available?(server) do
       GenServer.call(server, :request_refresh)
     else
       :unavailable
     end
   end
+
+  defp server_available?(server) when is_atom(server), do: Process.whereis(server) != nil
+  defp server_available?(server) when is_pid(server), do: Process.alive?(server)
+  defp server_available?(_server), do: true
 
   @spec snapshot() :: map() | :timeout | :unavailable
   def snapshot, do: snapshot(__MODULE__, 15_000)

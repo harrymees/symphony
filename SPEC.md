@@ -333,6 +333,7 @@ Top-level keys:
 - `hooks`
 - `agent`
 - `codex`
+- `webhooks` (extension)
 
 Unknown keys SHOULD be ignored for forward compatibility.
 
@@ -375,6 +376,24 @@ Fields:
 - `interval_ms` (integer)
   - Default: `30000`
   - Changes SHOULD be re-applied at runtime and affect future tick scheduling without restart.
+
+#### 5.3.2a `webhooks` (extension object)
+
+Implementations may support webhook-triggered dispatch alongside polling. When present, the
+`webhooks.linear` object describes Linear webhook verification and routing metadata.
+
+Fields:
+
+- `linear.secret` (string)
+  - May be a literal HMAC secret or `$VAR_NAME`.
+  - Canonical environment variable: `LINEAR_WEBHOOK_SECRET`.
+  - The secret must not be logged or rendered into operator-facing output.
+- `linear.project_id` (string, optional)
+  - May be a literal Linear project UUID or `$VAR_NAME`.
+  - Canonical environment variable: `LINEAR_PROJECT_ID`.
+  - If present, webhook handlers should reject/ignore Issue webhook payloads whose `projectId` does
+    not match before making any Linear API calls. This keeps all-team/team-scoped webhooks from
+    reintroducing a polling-like API load pattern.
 
 #### 5.3.3 `workspace` (object)
 
@@ -1519,6 +1538,18 @@ Minimum endpoints:
       "operations": ["poll", "reconcile"]
     }
     ```
+
+- `POST /api/v1/linear/webhook` (extension)
+  - Accepts Linear webhook deliveries for event-driven dispatch.
+  - Must verify `Linear-Signature` / `linear-signature` as hex HMAC-SHA256 over the exact raw request
+    body using `webhooks.linear.secret`.
+  - Should reject stale or missing timestamps using `webhookTimestamp` from the body or
+    `Linear-Timestamp` / `linear-timestamp` as a fallback.
+  - For `type == "Issue"`, should project-filter the payload before any Linear API call when
+    `webhooks.linear.project_id` is configured, then queue an issue-specific refresh instead of a
+    full candidate poll.
+  - Successful accepted or intentionally ignored deliveries should return `200 OK` quickly so Linear
+    does not retry; invalid signatures should return `401`.
 
 API design notes:
 

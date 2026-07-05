@@ -248,6 +248,44 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule LinearWebhook do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @primary_key false
+    embedded_schema do
+      field(:secret, :string)
+      field(:project_id, :string)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:secret, :project_id], empty_values: [])
+    end
+  end
+
+  defmodule Webhooks do
+    @moduledoc false
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.Config.Schema.LinearWebhook
+
+    @primary_key false
+    embedded_schema do
+      embeds_one(:linear, LinearWebhook, on_replace: :update, defaults_to_struct: true)
+    end
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [], empty_values: [])
+      |> cast_embed(:linear, with: &LinearWebhook.changeset/2)
+    end
+  end
+
   defmodule Server do
     @moduledoc false
     use Ecto.Schema
@@ -276,6 +314,7 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:codex, Codex, on_replace: :update, defaults_to_struct: true)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:webhooks, Webhooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:server, Server, on_replace: :update, defaults_to_struct: true)
   end
 
@@ -310,16 +349,19 @@ defmodule SymphonyElixir.Config.Schema do
   end
 
   @spec resolve_runtime_turn_sandbox_policy(%__MODULE__{}, Path.t() | nil, keyword()) ::
-          {:ok, map()} | {:error, term()}
+          {:ok, map() | nil} | {:error, term()}
   def resolve_runtime_turn_sandbox_policy(settings, workspace \\ nil, opts \\ []) do
-    case settings.codex.turn_sandbox_policy do
-      %{} = policy ->
-        {:ok, policy}
+    cond do
+      is_map(settings.codex.turn_sandbox_policy) ->
+        {:ok, settings.codex.turn_sandbox_policy}
 
-      _ ->
+      settings.codex.thread_sandbox == "workspace-write" ->
         workspace
         |> default_workspace_root(settings.workspace.root)
         |> default_runtime_turn_sandbox_policy(opts)
+
+      true ->
+        {:ok, nil}
     end
   end
 
@@ -368,6 +410,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:codex, with: &Codex.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
+    |> cast_embed(:webhooks, with: &Webhooks.changeset/2)
     |> cast_embed(:server, with: &Server.changeset/2)
   end
 
@@ -389,7 +432,16 @@ defmodule SymphonyElixir.Config.Schema do
         turn_sandbox_policy: normalize_optional_map(settings.codex.turn_sandbox_policy)
     }
 
-    %{settings | tracker: tracker, workspace: workspace, codex: codex}
+    webhooks = %{
+      settings.webhooks
+      | linear: %{
+          settings.webhooks.linear
+          | secret: resolve_secret_setting(settings.webhooks.linear.secret, System.get_env("LINEAR_WEBHOOK_SECRET")),
+            project_id: resolve_secret_setting(settings.webhooks.linear.project_id, System.get_env("LINEAR_PROJECT_ID"))
+        }
+    }
+
+    %{settings | tracker: tracker, workspace: workspace, codex: codex, webhooks: webhooks}
   end
 
   defp normalize_keys(value) when is_map(value) do

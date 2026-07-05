@@ -1,6 +1,27 @@
 defmodule SymphonyElixir.CoreTest do
   use SymphonyElixir.TestSupport
 
+  defmodule WebhookRefreshLinearClient do
+    def fetch_issue_states_by_ids(issue_ids) do
+      send(Process.get(:test_recipient), {:fetch_issue_states_by_ids_called, issue_ids})
+
+      {:ok,
+       [
+         %Issue{
+           id: List.first(issue_ids),
+           identifier: "HAR-999",
+           title: "Webhook refresh",
+           state: "Backlog"
+         }
+       ]}
+    end
+
+    def fetch_candidate_issues do
+      send(Process.get(:test_recipient), :fetch_candidate_issues_called)
+      {:ok, []}
+    end
+  end
+
   test "config defaults and validation checks" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_api_token: nil,
@@ -131,6 +152,63 @@ defmodule SymphonyElixir.CoreTest do
     assert Config.settings!().tracker.api_key == env_api_key
     assert Config.settings!().tracker.project_slug == "project"
     assert :ok = Config.validate!()
+  end
+
+  test "linear webhook secret and project id resolve from env vars" do
+    previous_secret = System.get_env("LINEAR_WEBHOOK_SECRET")
+    previous_project_id = System.get_env("LINEAR_PROJECT_ID")
+
+    on_exit(fn ->
+      restore_env("LINEAR_WEBHOOK_SECRET", previous_secret)
+      restore_env("LINEAR_PROJECT_ID", previous_project_id)
+    end)
+
+    System.put_env("LINEAR_WEBHOOK_SECRET", "webhook-secret-from-env")
+    System.put_env("LINEAR_PROJECT_ID", "project-id-from-env")
+
+    write_workflow_file!(Workflow.workflow_file_path(), webhook_linear_secret: nil, webhook_linear_project_id: nil)
+
+    assert Config.settings!().webhooks.linear.secret == "webhook-secret-from-env"
+    assert Config.settings!().webhooks.linear.project_id == "project-id-from-env"
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      webhook_linear_secret: "workflow-secret",
+      webhook_linear_project_id: "workflow-project-id"
+    )
+
+    assert Config.settings!().webhooks.linear.secret == "workflow-secret"
+    assert Config.settings!().webhooks.linear.project_id == "workflow-project-id"
+  end
+
+  test "linear webhook event refreshes one issue id without a full candidate poll" do
+    previous_linear_client_module = Application.get_env(:symphony_elixir, :linear_client_module)
+
+    on_exit(fn ->
+      if is_nil(previous_linear_client_module) do
+        Application.delete_env(:symphony_elixir, :linear_client_module)
+      else
+        Application.put_env(:symphony_elixir, :linear_client_module, previous_linear_client_module)
+      end
+
+      Process.delete(:test_recipient)
+    end)
+
+    Process.put(:test_recipient, self())
+    Application.put_env(:symphony_elixir, :linear_client_module, WebhookRefreshLinearClient)
+
+    state = %Orchestrator.State{
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{},
+      max_concurrent_agents: 1
+    }
+
+    assert {:noreply, _updated_state} =
+             Orchestrator.handle_cast({:linear_webhook, "issue-webhook", %{source: :test}}, state)
+
+    assert_receive {:fetch_issue_states_by_ids_called, ["issue-webhook"]}
+    refute_receive :fetch_candidate_issues_called, 50
   end
 
   test "linear assignee resolves from LINEAR_ASSIGNEE env var" do
@@ -797,6 +875,61 @@ defmodule SymphonyElixir.CoreTest do
            } = :sys.get_state(pid).retry_attempts[issue_id]
   end
 
+  test "retry dispatch refresh errors are rescheduled instead of orphaning the claim" do
+    issue_id = "issue-refresh-error"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-570",
+      state: "Rework",
+      title: "Retry me"
+    }
+
+    fetcher = fn [^issue_id] -> {:error, {:linear_api_status, 400}} end
+
+    updated_state =
+      Orchestrator.dispatch_issue_for_test(state, issue, 1, nil, fetcher)
+
+    assert MapSet.member?(updated_state.claimed, issue_id)
+
+    assert %{attempt: 2, identifier: "MT-570", error: error} =
+             updated_state.retry_attempts[issue_id]
+
+    assert error =~ "issue refresh failed"
+    assert error =~ "linear_api_status"
+  end
+
+  test "retry dispatch releases stale claim when revalidation shows issue is gone" do
+    issue_id = "issue-refresh-missing"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-571",
+      state: "Rework",
+      title: "Release me"
+    }
+
+    fetcher = fn [^issue_id] -> {:ok, []} end
+
+    updated_state =
+      Orchestrator.dispatch_issue_for_test(state, issue, 1, nil, fetcher)
+
+    refute MapSet.member?(updated_state.claimed, issue_id)
+    assert updated_state.retry_attempts == %{}
+  end
+
   test "manual refresh coalesces repeated requests and ignores superseded ticks" do
     now_ms = System.monotonic_time(:millisecond)
     stale_tick_token = make_ref()
@@ -1092,7 +1225,7 @@ defmodule SymphonyElixir.CoreTest do
     assert prompt =~ "This is an unattended orchestration session."
     assert prompt =~ "Only stop early for a true blocker"
     assert prompt =~ "Do not include \"next steps for user\""
-    assert prompt =~ "open and follow `.codex/skills/land/SKILL.md`"
+    assert prompt =~ "open and follow `.agents/skills/land/SKILL.md`"
     assert prompt =~ "Do not call `gh pr merge` directly"
     assert prompt =~ "Continuation context:"
     assert prompt =~ "retry attempt #2"

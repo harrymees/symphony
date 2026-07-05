@@ -38,7 +38,7 @@ Linear issue can become a dispatch candidate again after restart.
 2. Get a new personal token in Linear via Settings → Security & access → Personal API keys, and
    set it as the `LINEAR_API_KEY` environment variable.
 3. Copy this directory's `WORKFLOW.md` to your repo.
-4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo.
+4. Optionally copy the `commit`, `push`, `pull`, `land`, and `linear` skills to your repo under `.agents/skills/`.
    - The `linear` skill expects Symphony's `linear_graphql` app-server tool for raw Linear GraphQL
      operations such as comment editing or upload flows.
 5. Customize the copied `WORKFLOW.md` file for your project.
@@ -161,6 +161,14 @@ codex:
   reload error until the file is fixed.
 - `server.port` or CLI `--port` enables the optional Phoenix LiveView dashboard and JSON API at
   `/`, `/api/v1/state`, `/api/v1/<issue_identifier>`, and `/api/v1/refresh`.
+- `webhooks.linear.secret` enables the signed Linear webhook receiver at `/api/v1/linear/webhook`.
+  Set it to `$LINEAR_WEBHOOK_SECRET` and configure Linear with the same secret. The receiver verifies
+  the raw-body HMAC in `linear-signature`, checks Linear's timestamp, and queues an issue-specific
+  refresh rather than a full poll. Add `webhooks.linear.project_id: $LINEAR_PROJECT_ID` when the
+  project UUID is known so all-team/team-scoped webhooks can ignore other projects without using the
+  Linear API.
+- For webhook-first deployments, keep `polling.interval_ms` high enough to be a backup only, for
+  example `10800000` for a 3h fallback poll.
 
 ## Web dashboard
 
@@ -177,7 +185,7 @@ The observability UI now runs on a minimal Phoenix stack:
 - `lib/`: application code and Mix tasks
 - `test/`: ExUnit coverage for runtime behavior
 - `WORKFLOW.md`: in-repo workflow contract used by local runs
-- `../.codex/`: repository-local Codex skills and setup helpers
+- `../.agents/`: repository-local agent skills and setup helpers
 
 ## Testing
 
