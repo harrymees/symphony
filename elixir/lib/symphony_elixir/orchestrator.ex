@@ -951,11 +951,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp handle_retry_issue(%State{} = state, issue_id, attempt, metadata) do
-    case Tracker.fetch_candidate_issues() do
-      {:ok, issues} ->
-        issues
-        |> find_issue_by_id(issue_id)
-        |> handle_retry_issue_lookup(state, issue_id, attempt, metadata)
+    case Tracker.fetch_issue_states_by_ids([issue_id]) do
+      {:ok, [issue | _]} ->
+        handle_retry_issue_lookup(issue, state, issue_id, attempt, metadata)
+
+      {:ok, []} ->
+        Logger.debug("Issue no longer visible during retry lookup: issue_id=#{issue_id}")
+        {:noreply, release_issue_claim(state, issue_id)}
 
       {:error, reason} ->
         Logger.warning("Retry poll failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
@@ -1185,16 +1187,6 @@ defmodule SymphonyElixir.Orchestrator do
       _ ->
         true
     end
-  end
-
-  defp find_issue_by_id(issues, issue_id) when is_binary(issue_id) do
-    Enum.find(issues, fn
-      %Issue{id: ^issue_id} ->
-        true
-
-      _ ->
-        false
-    end)
   end
 
   defp find_issue_id_for_ref(running, ref) do
