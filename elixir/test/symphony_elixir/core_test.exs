@@ -781,6 +781,34 @@ defmodule SymphonyElixir.CoreTest do
     assert error =~ "linear_api_status"
   end
 
+  test "retry dispatch honors the Linear rate-limit retry window" do
+    issue_id = "issue-rate-limited-refresh"
+
+    state = %Orchestrator.State{
+      claimed: MapSet.new([issue_id]),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+
+    issue = %Issue{
+      id: issue_id,
+      identifier: "MT-571",
+      state: "Rework",
+      title: "Rate limited retry"
+    }
+
+    fetcher = fn [^issue_id] -> {:error, {:linear_rate_limited, 3_600_000}} end
+
+    updated_state =
+      Orchestrator.dispatch_issue_for_test(state, issue, 1, nil, fetcher)
+
+    assert %{attempt: 2, due_at_ms: due_at_ms, identifier: "MT-571", error: error} =
+             updated_state.retry_attempts[issue_id]
+
+    assert error =~ "linear_rate_limited"
+    assert_due_in_range(due_at_ms, 3_599_000, 3_601_000)
+  end
+
   test "retry dispatch releases stale claim when revalidation shows issue is gone" do
     issue_id = "issue-refresh-missing"
 

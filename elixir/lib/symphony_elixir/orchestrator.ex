@@ -928,7 +928,8 @@ defmodule SymphonyElixir.Orchestrator do
             identifier: identifier,
             error: error,
             worker_host: worker_host,
-            workspace_path: workspace_path
+            workspace_path: workspace_path,
+            retry_after_ms: Map.get(metadata, :retry_after_ms)
           })
     }
   end
@@ -940,7 +941,8 @@ defmodule SymphonyElixir.Orchestrator do
           identifier: Map.get(retry_entry, :identifier),
           error: Map.get(retry_entry, :error),
           worker_host: Map.get(retry_entry, :worker_host),
-          workspace_path: Map.get(retry_entry, :workspace_path)
+          workspace_path: Map.get(retry_entry, :workspace_path),
+          retry_after_ms: Map.get(retry_entry, :retry_after_ms)
         }
 
         {:ok, attempt, metadata, %{state | retry_attempts: Map.delete(state.retry_attempts, issue_id)}}
@@ -962,12 +964,17 @@ defmodule SymphonyElixir.Orchestrator do
       {:error, reason} ->
         Logger.warning("Retry poll failed for issue_id=#{issue_id} issue_identifier=#{metadata[:identifier] || issue_id}: #{inspect(reason)}")
 
+        retry_metadata =
+          metadata
+          |> Map.put(:error, "retry poll failed: #{inspect(reason)}")
+          |> add_rate_limit_retry_delay(reason)
+
         {:noreply,
          schedule_issue_retry(
            state,
            issue_id,
            attempt + 1,
-           Map.merge(metadata, %{error: "retry poll failed: #{inspect(reason)}"})
+           retry_metadata
          )}
     end
   end
@@ -1062,11 +1069,15 @@ defmodule SymphonyElixir.Orchestrator do
          reason
        )
        when is_integer(attempt) and attempt > 0 do
-    schedule_issue_retry(state, issue.id, attempt + 1, %{
-      identifier: issue.identifier,
-      error: "issue refresh failed: #{inspect(reason)}",
-      worker_host: preferred_worker_host
-    })
+    retry_metadata =
+      %{
+        identifier: issue.identifier,
+        error: "issue refresh failed: #{inspect(reason)}",
+        worker_host: preferred_worker_host
+      }
+      |> add_rate_limit_retry_delay(reason)
+
+    schedule_issue_retry(state, issue.id, attempt + 1, retry_metadata)
   end
 
   defp maybe_reschedule_retry_after_refresh_error(
@@ -1078,9 +1089,20 @@ defmodule SymphonyElixir.Orchestrator do
        ),
        do: state
 
+  defp add_rate_limit_retry_delay(metadata, {:linear_rate_limited, retry_after_ms})
+       when is_map(metadata) and is_integer(retry_after_ms) and retry_after_ms > 0 do
+    Map.put(metadata, :retry_after_ms, retry_after_ms)
+  end
+
+  defp add_rate_limit_retry_delay(metadata, _reason), do: metadata
+
   defp release_issue_claim(%State{} = state, issue_id) do
     %{state | claimed: MapSet.delete(state.claimed, issue_id)}
   end
+
+  defp retry_delay(_attempt, %{retry_after_ms: retry_after_ms})
+       when is_integer(retry_after_ms) and retry_after_ms > 0,
+       do: retry_after_ms
 
   defp retry_delay(attempt, metadata) when is_integer(attempt) and attempt > 0 and is_map(metadata) do
     if metadata[:delay_type] == :continuation and attempt == 1 do

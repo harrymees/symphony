@@ -459,6 +459,30 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert log =~ "Variable \\\"$ids\\\" got invalid value"
   end
 
+  test "linear client identifies rate-limited responses and retains the server retry window" do
+    assert {:error, {:linear_rate_limited, 3_600_000}} =
+             Client.graphql(
+               "query Viewer { viewer { id } }",
+               %{},
+               request_fun: fn _payload, _headers ->
+                 {:ok,
+                  %{
+                    status: 400,
+                    body: %{
+                      "errors" => [
+                        %{
+                          "extensions" => %{
+                            "code" => "RATELIMITED",
+                            "meta" => %{"rateLimitResult" => %{"duration" => 3_600_000}}
+                          }
+                        }
+                      ]
+                    }
+                  }}
+               end
+             )
+  end
+
   test "orchestrator sorts dispatch by priority then oldest created_at" do
     issue_same_priority_older = %Issue{
       id: "issue-old-high",

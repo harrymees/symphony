@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Linear.Client do
 
   @issue_page_size 50
   @max_error_body_log_bytes 1_000
+  @default_rate_limit_retry_ms 3_600_000
 
   @query """
   query SymphonyLinearPoll($projectSlug: String!, $stateNames: [String!]!, $first: Int!, $relationFirst: Int!, $after: String) {
@@ -187,7 +188,7 @@ defmodule SymphonyElixir.Linear.Client do
             linear_error_context(payload, response)
         )
 
-        {:error, {:linear_api_status, response.status}}
+        {:error, linear_error_reason(response)}
 
       {:error, reason} ->
         Logger.error("Linear GraphQL request failed: #{inspect(reason)}")
@@ -354,6 +355,40 @@ defmodule SymphonyElixir.Linear.Client do
   end
 
   defp maybe_put_operation_name(payload, _operation_name), do: payload
+
+  defp linear_error_reason(response) when is_map(response) do
+    case linear_rate_limit_retry_ms(response) do
+      {:ok, retry_ms} -> {:linear_rate_limited, retry_ms}
+      :not_rate_limited -> {:linear_api_status, response.status}
+    end
+  end
+
+  defp linear_rate_limit_retry_ms(%{body: %{"errors" => errors}}) when is_list(errors) do
+    errors
+    |> Enum.find_value(:not_rate_limited, fn error ->
+      case get_in(error, ["extensions", "code"]) do
+        "RATELIMITED" ->
+          retry_ms = get_in(error, ["extensions", "meta", "rateLimitResult", "duration"])
+          {:ok, normalize_rate_limit_retry_ms(retry_ms)}
+
+        _ ->
+          false
+      end
+    end)
+  end
+
+  defp linear_rate_limit_retry_ms(_response), do: :not_rate_limited
+
+  defp normalize_rate_limit_retry_ms(value) when is_integer(value) and value > 0, do: value
+
+  defp normalize_rate_limit_retry_ms(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {retry_ms, ""} when retry_ms > 0 -> retry_ms
+      _ -> @default_rate_limit_retry_ms
+    end
+  end
+
+  defp normalize_rate_limit_retry_ms(_value), do: @default_rate_limit_retry_ms
 
   defp linear_error_context(payload, response) when is_map(payload) do
     operation_name =
