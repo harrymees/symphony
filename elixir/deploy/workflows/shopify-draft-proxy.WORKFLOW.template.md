@@ -108,6 +108,8 @@ Implementation guidance:
 - Add tests for every supported operation you touch.
 - Keep runtime behavior Shopify-like rather than papering over mismatches.
 - If live credentials are required beyond `.env.example`, only treat that as a blocker after exhausting local/snapshot/conformance-fixture paths documented in the repo.
+- Live-conformance credential topology is host-managed: the shared grants live under `~/.shopify-draft-proxy/`, and each freshly-created workspace receives `SHOPIFY_CONFORMANCE_APP_ENV_PATH` in its root `.env`. Use `corepack pnpm conformance:probe` as the credential preflight; the canonical helper will use that path to refresh the shared Admin grant when needed.
+- Do not search the home directory broadly, copy app secrets between workspaces, or run `shopify app env pull` as normal workspace bootstrap. If the configured app-env path is absent/unreadable, record the precise host-configuration blocker after the probe. Never print `.env` contents, token suffixes, or Shopify CLI env-pull output.
 
 Tooling guidance:
 - Use `corepack pnpm ...` for package management and scripts.
