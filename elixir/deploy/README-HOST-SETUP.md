@@ -52,9 +52,19 @@ Optional per-instance values:
 - `SYMPHONY_HOST` (currently this host's Tailscale IP so dashboards are reachable on the tailnet)
 - workspace/log locations
 
-`CODING_HARNESS=opencode` runs Symphony through `deploy/harness/opencode_app_server.py`, a small Codex app-server protocol bridge that delegates turns to `opencode run --format json --auto`. The bridge loads Hermes' OpenRouter key from `/home/airhorns/.hermes/.env` if `OPENROUTER_API_KEY` is not already in the service environment. The shot-caller instance is intentionally configured with `OPENCODE_MODEL=openrouter/z-ai/glm-5.2`; do not switch that instance back to an OpenAI/GPT model.
+`CODING_HARNESS=opencode` runs Symphony through `deploy/harness/opencode_app_server.py`, a small Codex app-server protocol bridge that delegates turns to `opencode run --format json --auto`. The bridge loads Hermes' OpenRouter key from `/home/airhorns/.hermes/.env` if `OPENROUTER_API_KEY` is not already in the service environment. The current shot-caller instance is intentionally configured with `CODING_HARNESS=codex` and an OpenAI/Codex model; its retained `OPENCODE_*` values are inactive unless that harness is explicitly selected.
 
 The runner deliberately ignores a leaked parent-shell `CODEX_COMMAND` when the env file does not set one and `CODING_HARNESS` is `codex` or `opencode`; this keeps one instance's command from bleeding into another instance during manual renders.
+
+### Codex 0.144+ app-server commands
+
+Codex 0.144.3 requires app-server options after the subcommand. Use the JSONL/stdin form Symphony expects:
+
+```bash
+CODEX_COMMAND='codex app-server --stdio --config model="gpt-5.5" --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --config plugins.\"github@openai-curated\".enabled=false'
+```
+
+`--profile` no longer applies to `codex app-server`. For a per-instance custom provider, keep its provider definition in the base Codex config and pass the routing directly through app-server config overrides, for example `--config model_provider=\"shopify_proxy\" --config model=\"gpt-5.5\"`. Verify the exact rendered command by completing an `initialize` and `thread/start` JSONL handshake; the response must report the expected `modelProvider` and model before restarting a service.
 
 ## Useful commands
 

@@ -64,7 +64,9 @@ export PATH="/home/airhorns/.local/bin:/home/airhorns/.npm-global/bin:/home/airh
 
 case "$CODING_HARNESS" in
   codex)
-    default_agent_command='codex --config shell_environment_policy.inherit=all --config model_reasoning_effort=high --model gpt-5.4-codex app-server'
+    # Codex 0.144+ owns app-server flags after the subcommand. Explicit stdio
+    # matches Symphony's line-delimited JSON-RPC port transport.
+    default_agent_command='codex app-server --stdio --config model="gpt-5.4-codex" --config shell_environment_policy.inherit=all --config model_reasoning_effort=high'
     ;;
   opencode)
     default_agent_command="$ELIXIR_ROOT/deploy/harness/opencode_app_server.py"
