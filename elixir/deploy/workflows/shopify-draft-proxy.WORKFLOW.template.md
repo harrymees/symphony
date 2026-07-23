@@ -43,6 +43,16 @@ hooks:
     if [ ! -f .env ]; then
       cp /home/airhorns/code/shopify-draft-proxy/.env .env
     fi
+  before_run: |
+    # Codex 0.144's SQLite state runtime cannot reliably initialize when many
+    # app-server processes share ~/.codex. Keep config in the host home but
+    # give each issue workspace its own mutable runtime state.
+    codex_runtime_home="$PWD/.codex-symphony"
+    mkdir -p -m 700 "$codex_runtime_home"
+    ln -sfn /home/airhorns/.codex/config.toml "$codex_runtime_home/config.toml"
+    if ! git check-ignore -q .codex-symphony; then
+      printf '\n# Symphony-generated isolated Codex runtime state\n.codex-symphony/\n' >> .git/info/exclude
+    fi
 agent:
   max_concurrent_agents: 12
   max_concurrent_agents_by_state:
