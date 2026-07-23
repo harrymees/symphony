@@ -76,6 +76,70 @@ defmodule SymphonyElixir.AppServerTest do
     end
   end
 
+  test "app server preserves the service PATH without loading a login profile" do
+    test_root =
+      Path.join(
+        System.tmp_dir!(),
+        "symphony-elixir-app-server-service-path-#{System.unique_integer([:positive])}"
+      )
+
+    previous_home = System.get_env("HOME")
+    previous_path = System.get_env("PATH")
+    workspace_root = Path.join(test_root, "workspaces")
+    workspace = Path.join(workspace_root, "MT-1001")
+    bin_dir = Path.join(test_root, "bin")
+    login_home = Path.join(test_root, "login-home")
+    codex_binary = Path.join(bin_dir, "codex")
+
+    try do
+      File.mkdir_p!(workspace)
+      File.mkdir_p!(bin_dir)
+      File.mkdir_p!(login_home)
+      File.write!(Path.join(login_home, ".bash_profile"), "export PATH=/usr/bin:/bin\n")
+
+      File.write!(codex_binary, """
+      #!/bin/sh
+      count=0
+
+      while IFS= read -r _line; do
+        count=$((count + 1))
+
+        case "$count" in
+          1) printf '%s\\n' '{"id":1,"result":{}}' ;;
+          2) printf '%s\\n' '{"id":2,"result":{"thread":{"id":"thread-service-path"}}}' ;;
+          3) printf '%s\\n' '{"id":3,"result":{"turn":{"id":"turn-service-path"}}}' ;;
+          4) printf '%s\\n' '{"method":"turn/completed"}'; exit 0 ;;
+        esac
+      done
+      """)
+
+      File.chmod!(codex_binary, 0o755)
+      System.put_env("HOME", login_home)
+      System.put_env("PATH", "#{bin_dir}:#{previous_path}")
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        codex_command: "codex app-server"
+      )
+
+      issue = %Issue{
+        id: "issue-service-path",
+        identifier: "MT-1001",
+        title: "Preserve service PATH",
+        description: "The app server must not load a login profile that replaces service PATH",
+        state: "In Progress",
+        url: "https://example.org/issues/MT-1001",
+        labels: ["runtime"]
+      }
+
+      assert {:ok, _result} = AppServer.run(workspace, "Use configured app-server command", issue)
+    after
+      restore_env("HOME", previous_home)
+      restore_env("PATH", previous_path)
+      File.rm_rf(test_root)
+    end
+  end
+
   test "app server passes explicit turn sandbox policies through unchanged" do
     test_root =
       Path.join(
